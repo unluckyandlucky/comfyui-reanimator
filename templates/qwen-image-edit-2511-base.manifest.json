@@ -1,0 +1,293 @@
+{
+  "id": "qwen-image-edit-2511-base",
+  "name": "Qwen Image Edit 2511",
+  "kind": "image",
+  "version": 1,
+  "intents": {
+    "edit_pose": {
+      "requires": [
+        "cleanFrame",
+        "annotatedFrame"
+      ],
+      "optional": [
+        "contextFrames"
+      ],
+      "note": "The instruction IS the drawing. Without it this is not a cheaper edit_pose, it is a different request that would return the frame unchanged."
+    },
+    "edit_keyframe": {
+      "requires": [
+        "cleanFrame"
+      ],
+      "optional": [
+        "annotatedFrame",
+        "contextFrames"
+      ]
+    },
+    "create_from_drawing": {
+      "requires": [
+        "cleanFrame"
+      ],
+      "optional": [
+        "contextFrames"
+      ],
+      "note": "Drawing on blank paper. Picture 1 is not a frame here, it IS the drawing -- there is nothing underneath to edit, so it travels as Image 1 and there is no annotated frame. That is why this cannot be edit_keyframe with fewer images: the preamble for an edit tells the model to PRESERVE Picture 1, and obeying that over somebody's pencil lines hands the drawing back nearly unchanged. Which is exactly what it did."
+    }
+  },
+  "priority": 100,
+  "description": "Edits the annotated frame following the drawing and the instruction. Runs on your GPU; nothing leaves this machine.",
+  "inputStrategy": "roles",
+  "images": 3,
+  "roles": {
+    "cleanFrame": {
+      "slot": "$IMAGE_1",
+      "required": true,
+      "note": "Picture 1. The only image that reaches VAEEncode, so it alone decides the output size."
+    },
+    "annotatedFrame": {
+      "slot": "$IMAGE_2",
+      "required": false,
+      "detachWhenAbsent": [
+        {
+          "slot": "$PROMPT",
+          "input": "image2"
+        },
+        {
+          "slot": "$NEGATIVE",
+          "input": "image2"
+        }
+      ]
+    },
+    "contextFrames": {
+      "slots": [
+        "$IMAGE_3"
+      ],
+      "max": 1,
+      "required": false,
+      "compose": "continuityBoard",
+      "strategies": [
+        "smart_local_context",
+        "full_shot_contact_sheet"
+      ],
+      "detachWhenAbsent": [
+        {
+          "slot": "$PROMPT",
+          "input": "image3"
+        },
+        {
+          "slot": "$NEGATIVE",
+          "input": "image3"
+        }
+      ]
+    }
+  },
+  "prompt": {
+    "slot": "$PROMPT",
+    "instructionParameter": "instruction",
+    "lines": [
+      {
+        "when": [
+          "cleanFrame",
+          "!intent:create_from_drawing"
+        ],
+        "text": "Picture 1 is the original clean video frame."
+      },
+      {
+        "when": "intent:create_from_drawing",
+        "text": "Picture 1 is a hand-drawn sketch on blank paper: line work, flat or absent colour, and bare paper where the background should be. It is the SUBJECT of the request, not a frame to be preserved."
+      },
+      {
+        "when": "annotatedFrame",
+        "text": "Picture 2 is the same frame with the user's drawn pose/action guidance. The strokes are guidance only and must not appear in the result."
+      },
+      {
+        "when": [
+          "contextFrames",
+          "annotatedFrame"
+        ],
+        "text": "Picture 3 is a reference to LOOK THINGS UP IN, never a second scene to blend, merge or collage with this one — it is either a nearby approved keyframe or a model sheet, and it never appears in the result as a picture. Take from it identity, design, materials and lighting, and — if it shows this same set — what is behind the subject, so background that this frame hides and the new pose uncovers is painted the way that reference shows it rather than invented. Never its pose, its layout or its framing, and never a person or object that is not already in this frame."
+      },
+      {
+        "when": [
+          "contextFrames",
+          "!annotatedFrame"
+        ],
+        "text": "Picture 2 is a reference to LOOK THINGS UP IN, never a second scene to blend, merge or collage with this one — it is either a nearby approved keyframe or a model sheet, and it never appears in the result as a picture. Take from it identity, design, materials and lighting, and — if it shows this same set — what is behind the subject, so background that this frame hides and the new pose uncovers is painted the way that reference shows it rather than invented. Never its pose, its layout or its framing, and never a person or object that is not already in this frame."
+      },
+      {
+        "when": [
+          "always",
+          "!intent:create_from_drawing"
+        ],
+        "text": "Apply the user's instruction while preserving character design, framing, background and lighting."
+      },
+      {
+        "when": "intent:create_from_drawing",
+        "text": "Render it as a finished photorealistic image. Follow the drawing exactly for pose, gesture, silhouette, proportion and placement in frame, and invent the rest: materials, lighting, depth and background. No pencil lines, no paper texture, no white void, and no sketch left anywhere in the result."
+      }
+    ]
+  },
+  "quality": {
+    "slot": "$PREVIEW",
+    "preview": {
+      "value": true,
+      "steps": 4,
+      "cfg": 1
+    },
+    "final": {
+      "value": false,
+      "steps": 40,
+      "cfg": 4
+    }
+  },
+  "slots": {
+    "$IMAGE_1": {
+      "required": true,
+      "note": "clean frame"
+    },
+    "$IMAGE_2": {
+      "required": false,
+      "note": "annotated frame"
+    },
+    "$IMAGE_3": {
+      "required": false,
+      "note": "continuity board"
+    },
+    "$CHECKPOINT": {
+      "required": true,
+      "note": "chosen from requires.checkpoints, never by the caller"
+    },
+    "$PROMPT": {
+      "required": true
+    },
+    "$NEGATIVE": {
+      "required": true
+    },
+    "$SEED": {
+      "required": false,
+      "randomizePerRun": true
+    },
+    "$PREVIEW": {
+      "required": true
+    },
+    "$OUTPUT": {
+      "required": true
+    },
+    "$DENOISE": {
+      "required": false,
+      "min": 0.5,
+      "max": 1.0,
+      "note": "How much of Picture 1's own pixels survive. On create_from_drawing that IS fidelity to the drawing: 1.0 keeps only the structure the conditioning carries, lower keeps more of the literal lines. Floored at 0.5 on purpose -- below that the pencil survives into the output and the result is a tinted sketch, which is not a lower-fidelity render, it is a different thing. On the editing paths this widget means how much of the FRAME may change, which is not what the editor's control says, so the editor only sends it for a creation."
+    }
+  },
+  "requires": {
+    "backends": [
+      "cuda"
+    ],
+    "nodes": [
+      "UNETLoader",
+      "CLIPLoader",
+      "VAELoader",
+      "VAEEncode",
+      "VAEDecode",
+      "KSampler",
+      "LoadImage",
+      "SaveImage",
+      "TextEncodeQwenImageEditPlus",
+      "ModelSamplingAuraFlow",
+      "CFGNorm",
+      "FluxKontextImageScale",
+      "FluxKontextMultiReferenceLatentMethod",
+      "ComfySwitchNode",
+      "LoraLoaderModelOnly",
+      "PrimitiveInt",
+      "PrimitiveFloat",
+      "PrimitiveBoolean"
+    ],
+    "checkpoints": {
+      "slot": "$CHECKPOINT",
+      "note": "Static preference, not an adaptive selector. int8_convrot is what we measured fastest on the reference machine (RTX 3090: 4.17 vs 5.49 s/step); that is recorded as information, and it does not drive the choice. Anything cleverer needs benchmarks from more than one computer.",
+      "variants": {
+        "int8_convrot": {
+          "folder": "diffusion_models",
+          "file": "qwen_image_edit_2511_int8_convrot.safetensors",
+          "gb": 20.5,
+          "url": "https://huggingface.co/Comfy-Org/Qwen-Image-Edit_ComfyUI/resolve/main/split_files/diffusion_models/qwen_image_edit_2511_int8_convrot.safetensors",
+          "requiresNativeOps": [
+            "int8_tensorwise",
+            "convrot_w4a4"
+          ],
+          "referenceMeasurement": {
+            "machine": "RTX 3090 / compute 8.6 / ComfyUI 0.29.2 / torch 2.10.0+cu130",
+            "secondsPerStep": 4.17,
+            "quality": "preview",
+            "resolution": "1392x752",
+            "pictures": 2
+          }
+        },
+        "fp8mixed": {
+          "folder": "diffusion_models",
+          "file": "qwen_image_edit_2511_fp8mixed.safetensors",
+          "gb": 20.5,
+          "sha256": "c9fdc158e46d3b61ef75f21ae866ca2fe808bf4a53643120d1c1e87c19280a4e",
+          "url": "https://huggingface.co/Comfy-Org/Qwen-Image-Edit_ComfyUI/resolve/main/split_files/diffusion_models/qwen_image_edit_2511_fp8mixed.safetensors",
+          "requiresNativeOps": [
+            "float8_e4m3fn"
+          ],
+          "note": "Runs anywhere ComfyUI supports MixedPrecisionOps; on GPUs without native FP8 the ops are emulated, which ComfyUI reports at load time.",
+          "referenceMeasurement": {
+            "machine": "RTX 3090 / compute 8.6 / ComfyUI 0.29.2 / torch 2.10.0+cu130",
+            "secondsPerStep": 5.49,
+            "quality": "preview",
+            "resolution": "1392x752",
+            "pictures": 2
+          }
+        }
+      },
+      "preferred": "int8_convrot",
+      "alternatives": [
+        "fp8mixed"
+      ]
+    },
+    "models": [
+      {
+        "folder": "text_encoders",
+        "file": "qwen_2.5_vl_7b_fp8_scaled.safetensors",
+        "gb": 8.7,
+        "sha256": "cb5636d852a0ea6a9075ab1bef496c0db7aef13c02350571e388aea959c5c0b4",
+        "url": "https://huggingface.co/Comfy-Org/Qwen-Image_ComfyUI/resolve/main/split_files/text_encoders/qwen_2.5_vl_7b_fp8_scaled.safetensors"
+      },
+      {
+        "folder": "vae",
+        "file": "qwen_image_vae.safetensors",
+        "gb": 0.25,
+        "sha256": "a70580f0213e67967ee9c95f05bb400e8fb08307e017a924bf3441223e023d1f",
+        "url": "https://huggingface.co/Comfy-Org/Qwen-Image_ComfyUI/resolve/main/split_files/vae/qwen_image_vae.safetensors"
+      }
+    ],
+    "conditionalModels": [
+      {
+        "folder": "loras",
+        "file": "Qwen-Image-Edit-2511-Lightning-4steps-V1.0-bf16.safetensors",
+        "gb": 0.85,
+        "requiredFor": [
+          "preview"
+        ],
+        "sha256": "22226e8d05d354bb356627d428809f5afd7819399b077238a2b70a82883a904f",
+        "url": "https://huggingface.co/lightx2v/Qwen-Image-Edit-2511-Lightning/resolve/main/Qwen-Image-Edit-2511-Lightning-4steps-V1.0-bf16.safetensors",
+        "note": "ComfySwitchNode's branches are lazy (comfy_extras/nodes_logic.py:98), so ComfyUI only loads this file when quality=preview. Final runs without it."
+      }
+    ],
+    "compatibility": {
+      "tier": "full",
+      "minimumVramGb": 24,
+      "note": "Below this, no Lite preset exists yet: recommend Cloud."
+    }
+  },
+  "notes": [
+    "Derived from the user's SYSTMS ACTION workflow with the Action LoRA removed: that LoRA turns subjects into action figures, which is a stylisation, not a pose edit. The SYSTMS workflow is kept for a future stylize_action_figure preset.",
+    "TextEncodeQwenImageEditPlus takes exactly three images (image1/image2/image3) and prepends 'Picture N:' to the prompt itself, which is why the prompt lines say Picture and not Image.",
+    "measuredVramGb stays null until a real run fills it in. A number here that was never measured would be read as one that was."
+  ],
+  "tier": "full",
+  "minimumVramGb": 24
+}

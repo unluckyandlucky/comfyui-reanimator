@@ -1,0 +1,77 @@
+{
+  "id": "qwen-image-edit",
+  "name": "Qwen Image Edit",
+  "kind": "image",
+  "version": 1,
+  "description": "Edits the annotated frame following the drawing and the instruction. Runs on your GPU; nothing leaves this machine.",
+  "inputStrategy": "fixedImages",
+  "images": 1,
+  "slots": {
+    "$IMAGE_1": {
+      "required": true,
+      "note": "annotated frame"
+    },
+    "$PROMPT": {
+      "required": true
+    },
+    "$NEGATIVE": {
+      "required": false
+    },
+    "$OUTPUT": {
+      "required": true
+    },
+    "$SEED": {
+      "required": false,
+      "randomizePerRun": true
+    }
+  },
+  "requires": {
+    "nodes": [
+      "UNETLoader",
+      "CLIPLoader",
+      "VAELoader",
+      "VAEEncode",
+      "VAEDecode",
+      "KSampler",
+      "LoadImage",
+      "SaveImage",
+      "TextEncodeQwenImageEdit",
+      "ModelSamplingAuraFlow",
+      "CFGNorm",
+      "ImageScaleToTotalPixels",
+      "ComfySwitchNode",
+      "LoraLoaderModelOnly",
+      "PrimitiveInt",
+      "PrimitiveFloat",
+      "PrimitiveBoolean"
+    ],
+    "models": [
+      {
+        "folder": "diffusion_models",
+        "file": "qwen_image_edit_fp8_e4m3fn.safetensors"
+      },
+      {
+        "folder": "vae",
+        "file": "qwen_image_vae.safetensors"
+      },
+      {
+        "folder": "text_encoders",
+        "file": "qwen_2.5_vl_7b_fp8_scaled.safetensors"
+      }
+    ],
+    "optionalModels": [
+      {
+        "folder": "loras",
+        "file": "Qwen-Image-Edit-Lightning-4steps-V1.0-bf16.safetensors",
+        "note": "Only used when 'Enable 4steps LoRA' is on. About 5x faster; worth installing later. The filename must match the graph exactly: the validator downgrades a missing OPTIONAL model to a warning by comparing this string, so a near-miss here would block the whole template on a file the workflow never loads."
+      }
+    ],
+    "minVramGb": 12
+  },
+  "notes": [
+    "Derived from the user's own working ComfyUI workflow, with five nodes retitled.",
+    "Bound by node title, never by node id: ids change on every re-export from ComfyUI, titles do not.",
+    "Predates the role-based API: no cleanFrame/annotatedFrame slots, so it cannot serve edit_pose or edit_keyframe through intent resolution. Declared with no intents on purpose -- it stays reachable by an explicit templateId, and nothing resolves to it by accident."
+  ],
+  "intents": []
+}

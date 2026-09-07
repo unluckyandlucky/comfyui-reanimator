@@ -1,0 +1,204 @@
+{
+  "id": "ltx-23-keyframes",
+  "name": "LTX 2.3 · keyframe interpolation",
+  "kind": "video",
+  "version": 1,
+  "fps": 24,
+  "intents": {
+    "video_from_keyframes": {
+      "requires": [
+        "keyframes"
+      ],
+      "note": "The whole point of the preset: still images pinned at frame positions, and the model fills the gaps. Without keyframes this is text-to-video, which is a different request and a different preset."
+    }
+  },
+  "priority": 100,
+  "description": "Builds a video from your keyframes, timed in frames. Runs on your GPU; nothing leaves this machine.",
+  "inputStrategy": "roles",
+  "images": 50,
+  "roles": {
+    "keyframes": {
+      "slot": "$IMAGE_PATHS",
+      "required": true,
+      "collect": true,
+      "max": 50,
+      "note": "One loader takes the whole list, so this role is NOT one image per slot. Order matters: image N is timed by keyframe N."
+    }
+  },
+  "frames": {
+    "slot": "$FRAMES",
+    "min": 9,
+    "step": 8,
+    "offset": 1,
+    "note": "LTX video latents want 8n+1 frames. The editor sends the span it actually means and the bridge rounds UP to the next legal length, then says by how much. Rounding in the editor would put an LTX rule into a contract that is supposed to outlive LTX; rounding silently would hand back a clip longer than the timeline with no explanation."
+  },
+  "sequencer": {
+    "parameter": "$SEQUENCER",
+    "note": "The editor sends [{frame, strength}, ...] once. This workflow samples the shot in three stages and each stage has its own sequencer node, so the bridge mirrors the timing into $SEQUENCER_2 and $SEQUENCER_3. A stage left on the shipped timings would re-time the shot mid-render."
+  },
+  "prompt": {
+    "slot": "$PROMPT",
+    "instructionParameter": "instruction",
+    "lines": [
+      {
+        "when": "always",
+        "text": "The supplied still images are keyframes pinned at fixed frame positions. Move between them exactly as they are drawn: do not invent new poses, do not add or remove characters, and do not change the framing, the character design or the lighting between keys."
+      }
+    ]
+  },
+  "slots": {
+    "$IMAGE_PATHS": {
+      "required": true,
+      "note": "every keyframe image, one filename per line"
+    },
+    "$SEQUENCER": {
+      "required": true,
+      "note": "stage 1 timing"
+    },
+    "$SEQUENCER_2": {
+      "required": false,
+      "note": "stage 2 timing — mirrored from $SEQUENCER by the bridge"
+    },
+    "$SEQUENCER_3": {
+      "required": false,
+      "note": "stage 3 timing — mirrored from $SEQUENCER by the bridge"
+    },
+    "$FRAMES": {
+      "required": true,
+      "note": "output length. LTX wants 8n+1; the bridge rounds up and says so."
+    },
+    "$PROMPT": {
+      "required": true
+    },
+    "$SEED": {
+      "required": false,
+      "randomizePerRun": true
+    },
+    "$CHECKPOINT": {
+      "required": true,
+      "note": "chosen from requires.checkpoints, never by the caller"
+    },
+    "$OUTPUT": {
+      "required": true
+    }
+  },
+  "requires": {
+    "backends": [
+      "cuda"
+    ],
+    "nodes": [
+      "BasicScheduler",
+      "CFGGuider",
+      "CLIPTextEncode",
+      "CheckpointLoaderSimple",
+      "ConditioningZeroOut",
+      "CreateVideo",
+      "EmptyLTXVLatentVideo",
+      "GetImageSize",
+      "ImageScaleBy",
+      "KSamplerSelect",
+      "LTXAVTextEncoderLoader",
+      "LTXSequencer",
+      "LTXVAudioVAEDecode",
+      "LTXVConcatAVLatent",
+      "LTXVConditioning",
+      "LTXVCropGuides",
+      "LTXVEmptyLatentAudio",
+      "LTXVLatentUpsampler",
+      "LTXVSeparateAVLatent",
+      "LatentUpscaleModelLoader",
+      "LazySwitchKJ",
+      "LoraLoaderModelOnly",
+      "MultiImageLoader",
+      "PrimitiveBoolean",
+      "PrimitiveInt",
+      "RandomNoise",
+      "SamplerCustomAdvanced",
+      "SaveVideo",
+      "VAEDecode",
+      "VAEDecodeTiled",
+      "VAELoaderKJ",
+      "easy mathInt"
+    ],
+    "nodePacks": [
+      {
+        "name": "WhatDreamsCost-ComfyUI",
+        "provides": [
+          "LTXSequencer",
+          "MultiImageLoader"
+        ],
+        "note": "The keyframe mechanism itself. LTXSequencer is a loop over core LTXVAddGuide, so it takes up to 50 keys with an insert frame and a strength each."
+      },
+      {
+        "name": "ComfyUI-KJNodes",
+        "provides": [
+          "VAELoaderKJ",
+          "LazySwitchKJ"
+        ]
+      },
+      {
+        "name": "comfyui-easy-use",
+        "provides": [
+          "easy mathInt"
+        ]
+      }
+    ],
+    "checkpoints": {
+      "slot": "$CHECKPOINT",
+      "variants": {
+        "dev_fp8": {
+          "folder": "checkpoints",
+          "file": "ltx-2.3-22b-dev-fp8.safetensors",
+          "gb": 22,
+          "note": "The 3090 has no native FP8, so ComfyUI emulates the ops. That is a speed cost, not a correctness one — see the Qwen 2511 measurement for how large it can get."
+        }
+      },
+      "preferred": "dev_fp8",
+      "alternatives": []
+    },
+    "models": [
+      {
+        "folder": "text_encoders",
+        "file": "gemma_3_12B_it_fp4_mixed.safetensors",
+        "gb": 9.45,
+        "sha256": "aaca463d11e6d8d2a4bdb0d6299214c15ef78a3f73e0ef8113d5a9d0219b3f6d",
+        "url": "https://huggingface.co/Comfy-Org/ltx-2/resolve/main/split_files/text_encoders/gemma_3_12B_it_fp4_mixed.safetensors",
+        "note": "The Gemma 3 encoder LTX 2.3 reads prompts with. NOT on disk on the reference machine as of 2026-09-05 (models/text_encoders/ is empty), so this preset cannot run until it is there. Declared with its hash so the bridge names the file and the folder instead of failing inside LTXAVTextEncoderLoader — and so it can verify a download rather than trust one."
+      },
+      {
+        "folder": "vae",
+        "file": "LTX23_video_vae_bf16.safetensors"
+      },
+      {
+        "folder": "vae",
+        "file": "LTX23_audio_vae_bf16.safetensors"
+      },
+      {
+        "folder": "latent_upscale_models",
+        "file": "ltx-2.3-spatial-upscaler-x1.5-1.0.safetensors"
+      },
+      {
+        "folder": "latent_upscale_models",
+        "file": "ltx-2.3-spatial-upscaler-x2-1.1.safetensors"
+      },
+      {
+        "folder": "loras",
+        "file": "ltx2/ltx-2.3-22b-distilled-lora-dynamic_fro09_avg_rank_105_bf16.safetensors"
+      }
+    ],
+    "compatibility": {
+      "tier": "full",
+      "minimumVramGb": 24,
+      "note": "Measured on nothing yet. This number is inherited from the image preset and must be replaced by a real reading from the first end-to-end run."
+    }
+  },
+  "notes": [
+    "Derived from the user's own working LTX_multimage_API.json, retitled rather than rebuilt. Trimming the three sampling stages down to one would have been a smaller graph and a worse bet: this is the arrangement already known to run on the reference machine.",
+    "Output resolution is NOT a parameter. It is derived inside the workflow: MultiImageLoader -> ImageScaleBy 0.5 -> GetImageSize -> EmptyLTXVLatentVideo, so the render follows the keyframes' own size at half scale and the three stages upscale from there.",
+    "fps is pinned at 24 and declared above. Four nodes carry a frame_rate and they must agree; until one value can reach all of them, a project at another fps must be refused with that reason rather than rendered at the wrong speed.",
+    "measuredVramGb and any seconds-per-step stay absent until a real run fills them in. A number here that was never measured would be read as one that was.",
+    "The KJNodes live-preview override is deliberately NOT in this graph. It is a ComfyUI-UI convenience with no effect on the render, and headless it is fatal: its preview thread reads PromptServer.last_node_id, which ComfyUI only sets for a prompt queued with a client_id. The bridge queues without one on purpose, so the first preview callback killed the run 122 seconds in with \"'NoneType' object has no attribute 'encode'\". The same workflow run from ComfyUI's own tab finished fine, which is exactly why this was worth writing down: the node the user sees working is the node that cannot work here. Its tiny VAE (taeltx2_3.safetensors) went with it -- nothing else decoded through it."
+  ],
+  "tier": "full",
+  "minimumVramGb": 24
+}

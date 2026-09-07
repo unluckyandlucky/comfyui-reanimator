@@ -1,0 +1,9 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+
+# El bridge escribe su configuracion, sus claves y sus proyectos en el
+# directorio de usuario de ComfyUI. Si alguien clona esto DENTRO de ComfyUI y
+# ejecuta los tests desde aqui, el fallback de config.py cae en ./user.
+user/

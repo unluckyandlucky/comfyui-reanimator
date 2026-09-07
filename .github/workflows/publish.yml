@@ -1,0 +1,30 @@
+# Publica el nodo en el ComfyUI Registry, que es de donde lo saca ComfyUI
+# Manager cuando alguien busca "Reanimator Bridge".
+#
+# Antes de que esto funcione, una sola vez:
+#   1. Crear el publisher en https://registry.comfy.org (el id tiene que
+#      coincidir con `PublisherId` de pyproject.toml: "reanimator").
+#   2. Generar ahi un API key y guardarlo en el repo como secret
+#      REGISTRY_ACCESS_TOKEN (Settings -> Secrets -> Actions).
+#
+# Se dispara al subir un cambio de `version` en pyproject.toml: el registry
+# rechaza una version ya publicada, asi que subir la version ES la publicacion.
+# Tambien se puede lanzar a mano desde la pestana Actions.
+name: publish
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - pyproject.toml
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Publish to Comfy registry
+        uses: Comfy-Org/publish-node-action@main
+        with:
+          personal_access_token: ${{ secrets.REGISTRY_ACCESS_TOKEN }}
