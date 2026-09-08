@@ -1,0 +1,16 @@
+# Qué NO viaja al Registry. `comfy node publish` empaqueta todo lo que git
+# sigue, y hay dos carpetas que en un zip escaneado por seguridad se leen justo
+# al reves de lo que son:
+#
+#   tests/  son 3.900 lineas que SIMULAN los ataques que el bridge para:
+#           firmas falsificadas, "attacker@example.com", y rutas como
+#           "../secret.mp4", "/etc/passwd" o "C:\Windows\win.ini". Es la prueba
+#           de que el diseño aguanta, pero un escáner solo ve las cadenas.
+#
+#   tools/  genera un par de claves Ed25519 e imprime la privada por pantalla.
+#           Es de mantenimiento, no lo usa nadie que instale el nodo.
+#
+# Ninguna de las dos hace falta para ejecutar el bridge, y las dos siguen en el
+# repositorio: CI las ejecuta desde el checkout, no desde el zip.
+tests/
+tools/
