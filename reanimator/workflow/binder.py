@@ -21,7 +21,7 @@ carrying ``insert_frame_1`` is a keyframe sequencer, whatever feeds a sampler's
 ``positive`` input is the prompt. The fallback exists so a user's own workflow
 mostly works before they have retitled anything; it is a convenience, never a
 security boundary. What keeps this safe is that only *values* are ever written,
-never structure -- see :func:`bind`.
+never structure -- see :func:`fill`.
 """
 
 from __future__ import annotations
@@ -561,7 +561,7 @@ def _write_sequencer(bound: dict[str, Any], slot: Slot, name: str, value: Any) -
             _set_widget(node, name, f"strength_{index}", strength)
 
 
-def bind(
+def fill(
     graph: Mapping[str, Any],
     values: Mapping[str, Any],
     slots: Mapping[str, Slot] | None = None,

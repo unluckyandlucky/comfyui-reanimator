@@ -792,7 +792,7 @@ def validate(
     outputs = binder.output_node_ids(slots)
     if report.ok:
         try:
-            graph = binder.bind(template.graph, values, slots)
+            graph = binder.fill(template.graph, values, slots)
             plan = prune if prune is not None else template.detach_plan(set(values))
             if plan:
                 graph, report.pruned = binder.detach(graph, plan, slots)

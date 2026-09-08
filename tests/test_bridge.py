@@ -644,7 +644,7 @@ class TestBinder(TemplateTestCase):
         self.assertEqual(binder.output_node_ids(slots), [slots["$OUTPUT"].node_id])
 
     def test_bind_writes_the_values(self):
-        bound = binder.bind(
+        bound = binder.fill(
             self.graph, {"$PROMPT": "make it rain", "$IMAGE_1": "rb_abc123ef.png", "$SEED": 7}
         )
         slots = binder.find_slots(self.graph, self.template.slots)
@@ -656,12 +656,12 @@ class TestBinder(TemplateTestCase):
         """Templates are loaded once and cached, so an in-place edit would leak
         one user's prompt into the next run."""
         before = copy.deepcopy(self.graph)
-        binder.bind(self.graph, {"$PROMPT": "mutated"})
+        binder.fill(self.graph, {"$PROMPT": "mutated"})
         self.assertEqual(self.graph, before)
 
     def test_unknown_slot_is_refused(self):
         with self.assertRaises(binder.BindError) as ctx:
-            binder.bind(self.graph, {"$NOT_A_SLOT": "x"})
+            binder.fill(self.graph, {"$NOT_A_SLOT": "x"})
         self.assertEqual(ctx.exception.code, "unknown_slot")
 
     def test_non_scalar_value_is_refused(self):
@@ -669,7 +669,7 @@ class TestBinder(TemplateTestCase):
         that is what keeps 'parameters only, never a graph' true."""
         for value in ([["78", 0]], {"class_type": "Evil"}, ["a", 0], None):
             with self.subTest(value=value), self.assertRaises(binder.BindError) as ctx:
-                binder.bind(self.graph, {"$PROMPT": value})
+                binder.fill(self.graph, {"$PROMPT": value})
             self.assertEqual(ctx.exception.code, "bad_value")
 
     def test_wired_input_is_never_overwritten(self):
@@ -682,12 +682,12 @@ class TestBinder(TemplateTestCase):
             widget="steps", family="value", matched_by="title",
         )
         with self.assertRaises(binder.BindError) as ctx:
-            binder.bind(self.graph, {"$STEPS": 4}, {"$STEPS": wired})
+            binder.fill(self.graph, {"$STEPS": 4}, {"$STEPS": wired})
         self.assertEqual(ctx.exception.code, "slot_is_wired")
 
     def test_readonly_output_slot_cannot_be_written(self):
         with self.assertRaises(binder.BindError) as ctx:
-            binder.bind(self.graph, {"$OUTPUT": "x"})
+            binder.fill(self.graph, {"$OUTPUT": "x"})
         self.assertEqual(ctx.exception.code, "readonly_slot")
 
     def test_duplicate_slot_title_is_refused(self):
@@ -794,7 +794,7 @@ class TestKeyframeListBinding(BridgeTestCase):
             values["$IMAGE_PATHS"] = images
         if timings is not None:
             values["$SEQUENCER"] = timings
-        return binder.bind(self.graph, values)
+        return binder.fill(self.graph, values)
 
     def test_images_become_one_newline_separated_widget(self):
         bound = self.bound(images=self.names)
@@ -831,7 +831,7 @@ class TestKeyframeListBinding(BridgeTestCase):
         frame 18 becoming 18 seconds is a shot 25 times too long."""
         graph = keyframe_graph()
         graph["2"]["inputs"]["insert_mode"] = "seconds"
-        bound = binder.bind(graph, {"$SEQUENCER": [{"frame": 0}, {"frame": 18}]})
+        bound = binder.fill(graph, {"$SEQUENCER": [{"frame": 0}, {"frame": 18}]})
         self.assertEqual(bound["2"]["inputs"]["insert_mode"], "frames")
 
     def test_a_path_is_refused_where_a_filename_belongs(self):
@@ -866,15 +866,15 @@ class TestKeyframeListBinding(BridgeTestCase):
         and they must not reopen the hole it was closing."""
         for value in ([["1", 0]], [{"frame": ["1", 0]}], [{"class_type": "Evil"}]):
             with self.subTest(value=value), self.assertRaises(binder.BindError):
-                binder.bind(self.graph, {"$SEQUENCER": value})
+                binder.fill(self.graph, {"$SEQUENCER": value})
         with self.assertRaises(binder.BindError):
-            binder.bind(self.graph, {"$IMAGE_PATHS": [["1", 0]]})
+            binder.fill(self.graph, {"$IMAGE_PATHS": [["1", 0]]})
 
     def test_a_wired_widget_is_still_never_overwritten(self):
         graph = keyframe_graph()
         graph["2"]["inputs"]["insert_frame_2"] = ["9", 0]
         with self.assertRaises(binder.BindError) as ctx:
-            binder.bind(graph, {"$SEQUENCER": [{"frame": 0}, {"frame": 18}]})
+            binder.fill(graph, {"$SEQUENCER": [{"frame": 0}, {"frame": 18}]})
         self.assertEqual(ctx.exception.code, "slot_is_wired")
 
     def test_binding_survives_stripped_titles(self):
@@ -922,7 +922,7 @@ class TestMultiStageSequencers(BridgeTestCase):
 
     def test_all_stages_receive_the_same_timing(self):
         timings = [{"frame": 0}, {"frame": 18}, {"frame": 37}]
-        bound = binder.bind(
+        bound = binder.fill(
             self.staged_graph(),
             {"$SEQUENCER": timings, "$SEQUENCER_2": timings, "$SEQUENCER_3": timings},
         )
@@ -1316,7 +1316,7 @@ class TestDenoiseSlot(BridgeTestCase):
         self.assertEqual(slots["$DENOISE"].matched_by, "title")
 
     def test_both_values_are_written(self):
-        bound = binder.bind(self.template.graph, {"$SEED": 7, "$DENOISE": 0.72})
+        bound = binder.fill(self.template.graph, {"$SEED": 7, "$DENOISE": 0.72})
         node = bound[binder.find_slots(self.template.graph, ["$SEED"])["$SEED"].node_id]
         self.assertEqual(node["inputs"]["seed"], 7)
         self.assertEqual(node["inputs"]["denoise"], 0.72)
@@ -2051,7 +2051,7 @@ class TestCheckpointVariants(BridgeTestCase):
         slots = binder.find_slots(self.t.graph, self.t.slots)
         self.assertEqual(slots["$CHECKPOINT"].class_type, "UNETLoader")
         self.assertEqual(slots["$CHECKPOINT"].widget, "unet_name")
-        bound = binder.bind(self.t.graph, {"$CHECKPOINT": self.INT8}, slots)
+        bound = binder.fill(self.t.graph, {"$CHECKPOINT": self.INT8}, slots)
         self.assertEqual(
             bound[slots["$CHECKPOINT"].node_id]["inputs"]["unet_name"], self.INT8
         )
