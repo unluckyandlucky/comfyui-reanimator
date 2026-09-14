@@ -523,9 +523,20 @@ def _values_for(
     if parameters is not None and not isinstance(parameters, dict):
         raise BindError("'parameters' must be an object.", "bad_request")
 
+    # Every slot an image lands in. Those take registered input ids through
+    # ``inputs``/``inputIds`` and nothing else: a filename written straight into
+    # ``parameters`` was read, resized and deleted by the geometry step before
+    # the validator ever looked at it -- a path traversal the Comfy-Org registry
+    # review caught.
+    image_slots = {s for role in template.roles for s in template.role_slots(str(role))}
     values: dict[str, Any] = {}
     for name, value in (parameters or {}).items():
         if isinstance(name, str) and name.startswith("$"):
+            if name in image_slots or binder.family_of(name) in ("image", "imagelist"):
+                raise BindError(
+                    f"{name} takes an uploaded input, not a parameter.",
+                    "image_via_parameters",
+                )
             values[name] = value
         elif name != "instruction":
             raise BindError(f"Not a slot name: {name!r}", "unknown_slot")
@@ -598,8 +609,15 @@ def _values_for(
     # would be a video nobody asked for. The editor sends the timing ONCE; that
     # a preset happens to need three copies is the bridge's business.
     if "$SEQUENCER" in values:
-        for name in template.slots:
-            if binder.SEQUENCER_SLOT_RE.match(name) and name not in values:
+        sequencer_slots = [n for n in template.slots if binder.SEQUENCER_SLOT_RE.match(n)]
+        if not sequencer_slots:
+            # A preset that places keys by slot (first/last frame) has no timing
+            # to write. The editor sends $SEQUENCER as part of the contract and
+            # does not know which preset will serve it; refusing it as an
+            # unknown slot would make every such preset unusable from there.
+            del values["$SEQUENCER"]
+        for name in sequencer_slots:
+            if name not in values:
                 values[name] = values["$SEQUENCER"]
 
     if "$SEED" not in values and (template.slots.get("$SEED") or {}).get("randomizePerRun"):
@@ -912,16 +930,26 @@ def _prepare(body: dict[str, Any], refresh: bool):
 
     prompt_slot = (template.manifest.get("prompt") or {}).get("slot")
     instruction = (body.get("parameters") or {}).get("instruction")
+    # Top-level and additive: an older bridge ignores it, an older editor never
+    # sends it, and either way the legacy path below still runs.
+    user_instruction = body.get("userInstruction")
+    padded = bool(transform and transform.has_padding)
     if prompt_slot and instruction is not None:
-        text = validate.compose_prompt(template, str(instruction), supplied, intent)
-        if transform and transform.has_padding:
-            # Without saying so, the model paints scene into the bars. The
-            # editor learned this the hard way on the cloud path.
-            text = (
-                "The black border is temporary padding outside the original "
-                "frame. Do not extend the scene into it and do not treat it as "
-                "part of the image.\n\n" + text
+        if validate.owns_prompt(template, intent, user_instruction):
+            text = validate.compose_owned_prompt(
+                template, str(user_instruction), supplied, str(intent),
+                flags={"@padded"} if padded else set(),
             )
+        else:
+            text = validate.compose_prompt(template, str(instruction), supplied, intent)
+            if padded:
+                # Without saying so, the model paints scene into the bars. The
+                # editor learned this the hard way on the cloud path.
+                text = (
+                    "The black border is temporary padding outside the original "
+                    "frame. Do not extend the scene into it and do not treat it as "
+                    "part of the image.\n\n" + text
+                )
         values[str(prompt_slot)] = text
 
     report = validate.validate(

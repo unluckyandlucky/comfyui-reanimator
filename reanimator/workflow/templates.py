@@ -358,10 +358,19 @@ class Template:
             if not isinstance(role, dict):
                 continue
             slots = role.get("slots") or ([role["slot"]] if role.get("slot") else [])
-            if any(slot in supplied for slot in slots):
-                continue
+            role_supplied = any(slot in supplied for slot in slots)
             for removal in role.get("detachWhenAbsent") or []:
-                if isinstance(removal, dict) and removal.get("slot") and removal.get("input"):
+                if not (isinstance(removal, dict) and removal.get("slot") and removal.get("input")):
+                    continue
+                # By default a removal fires when the whole role is empty. With
+                # `whenSlotAbsent` it fires when that ONE slot got nothing: a
+                # first/last-frame preset has one role with two slots, and one
+                # image must unplug the last-frame input while the first stays.
+                only = removal.get("whenSlotAbsent")
+                if only is not None and str(only) not in slots:
+                    continue  # names a slot of another role: a manifest typo, not a wire
+                absent = (str(only) not in supplied) if only is not None else not role_supplied
+                if absent:
                     removals.append(
                         {"slot": str(removal["slot"]), "input": str(removal["input"])}
                     )

@@ -124,7 +124,27 @@
         "when": "intent:create_from_drawing",
         "text": "Render it as a finished photorealistic image. Follow the drawing exactly for pose, gesture, silhouette, proportion and placement in frame, and invent the rest: materials, lighting, depth and background. No pencil lines, no paper texture, no white void, and no sketch left anywhere in the result."
       }
-    ]
+    ],
+    "owned": {
+      "edit_pose": {
+        "note": "Used when the editor sends userInstruction; otherwise `lines` plus the editor's prompt, as before. Every sentence AND its position was measured on the 3090 across 14 rounds (2026-09-11/12, docs/qwen-2511-prompt-ab.md): short, 'Picture N' only, one reference, no rules paragraphs. Position turned out to matter as much as wording: the user's instruction LAST cut the red leaking into clothes, and the body-lock sentence as the LAST rule cut the model re-posing the whole person. Best measured wording: 6 of 8 seeds correct. Adding more anti-red sentences did not help, and an anti-outline sentence made it worse.",
+        "preamble": [
+          {"when": "cleanFrame", "text": "Picture 1 is the original video frame."},
+          {"when": "annotatedFrame", "text": "Picture 2 is the same frame with red sketch lines drawn by the user."},
+          {"when": ["contextFrames", "annotatedFrame"], "text": "Picture 3 is another frame from the same shot, only a reference for how the people and their clothes look, including parts that Picture 1 does not show."}
+        ],
+        "body": [
+          {"when": "annotatedFrame", "text": "Make the change where the red lines in Picture 2 are, following their shape and direction. Remove all red lines. The red lines only show shape and position; their colour means nothing, so do not make anything red."},
+          {"when": ["contextFrames", "annotatedFrame"], "text": "Any body part that becomes visible wears the same clothes and shoes as the rest of that person, as seen in Picture 3."},
+          {"when": "always", "text": "Keep the room, background, lighting, camera framing and everything that is not marked exactly as in Picture 1."},
+          {"when": "@padded", "text": "The black borders stay plain black."},
+          {"when": "annotatedFrame", "text": "Only what the lines mark may change: every person keeps the rest of their body, their head, torso, arms and hands, exactly where it is in Picture 1."}
+        ],
+        "ask": [
+          {"when": "always", "text": "Edit Picture 1: {instruction}.", "withoutInstruction": "Edit Picture 1 as the red lines in Picture 2 show."}
+        ]
+      }
+    }
   },
   "quality": {
     "slot": "$PREVIEW",
@@ -135,8 +155,9 @@
     },
     "final": {
       "value": false,
-      "steps": 40,
-      "cfg": 4
+      "steps": 16,
+      "cfg": 4,
+      "note": "Eran 40 y no servían de nada: medido el 2026-09-12 en una 3090 con la misma semilla, 12, 20, 28 y 40 pasos dan casi la misma imagen (2:21, 3:32, 4:56 y 7:02). Se dejan 16 por margen. Lo que esta rama NO hace es seguir el dibujo: sin el LoRA Lightning re-posa al personaje entero, y bajar el CFG a 3, 2,5 o 2 no lo arregla — así que para una edición con trazos la buena es preview. Ver docs/qwen-2511-prompt-ab.md. Y ojo: el numero que manda esta en el GRAFO (PrimitiveInt 170:166); esto es informativo."
     }
   },
   "slots": {

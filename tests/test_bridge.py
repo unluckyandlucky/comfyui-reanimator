@@ -430,6 +430,9 @@ OPTIONAL_INPUTS = {
     ("TextEncodeQwenImageEditPlus", "image1"),
     ("TextEncodeQwenImageEditPlus", "image2"),
     ("TextEncodeQwenImageEditPlus", "image3"),
+    # comfy_extras/nodes_minimax_h3.py (ComfyUI 0.35.0): both keyframes optional.
+    ("MiniMaxH3ImageToVideo", "first_frame"),
+    ("MiniMaxH3ImageToVideo", "last_frame"),
 }
 
 
@@ -1802,6 +1805,100 @@ class TestPromptComposition(BridgeTestCase):
                 self.t, "x", roles))
 
 
+class TestOwnedPrompt(BridgeTestCase):
+    """Qwen 2511 writes its own prompt for a drawn edit.
+
+    Measured, not assumed: given the editor's cloud prompt (~700 words, "Image
+    N") the model did not perform the edit; given four sentences in its own
+    "Picture N" vocabulary it did. So when the editor sends the user's words
+    apart, the template's text is the WHOLE prompt -- nothing from the cloud
+    prompt may leak back in.
+    """
+
+    ROLES = {"cleanFrame", "annotatedFrame", "contextFrames"}
+
+    def setUp(self) -> None:
+        super().setUp()
+        templates.reset()
+        self.t = templates.get("qwen-image-edit-2511-base")
+
+    def tearDown(self) -> None:
+        templates.reset()
+        super().tearDown()
+
+    def owned(self, instruction="floating legs", roles=None, flags=frozenset()):
+        return validate.compose_owned_prompt(
+            self.t, instruction, set(roles or self.ROLES), "edit_pose", flags)
+
+    def test_it_owns_only_when_the_user_words_came_apart(self):
+        self.assertTrue(validate.owns_prompt(self.t, "edit_pose", "floating legs"))
+        self.assertTrue(validate.owns_prompt(self.t, "edit_pose", ""))
+        # No userInstruction: an older editor. It keeps the legacy prompt.
+        self.assertFalse(validate.owns_prompt(self.t, "edit_pose", None))
+        # Paper and camera-only were not measured; they stay on the legacy path.
+        self.assertFalse(validate.owns_prompt(self.t, "create_from_drawing", "x"))
+        self.assertFalse(validate.owns_prompt(self.t, "edit_keyframe", "x"))
+
+    def test_the_measured_prompt_word_for_word(self):
+        """Pinned: these sentences AND their order are what was measured.
+
+        Order is not presentation here. The instruction sits last and the
+        body-lock rule closes the rules because 2511 obeys the end of the
+        prompt hardest -- both moves were worth whole seeds in the A/B. Moving
+        a line is a behaviour change and should be a deliberate edit of this
+        test, not a tidy-up.
+        """
+        self.assertEqual(
+            self.owned(flags={"@padded"}),
+            "Picture 1 is the original video frame. "
+            "Picture 2 is the same frame with red sketch lines drawn by the user. "
+            "Picture 3 is another frame from the same shot, only a reference for how "
+            "the people and their clothes look, including parts that Picture 1 does "
+            "not show.\n\n"
+            "Make the change where the red lines in Picture 2 are, following their "
+            "shape and direction. Remove all red lines. The red lines only show shape "
+            "and position; their colour means nothing, so do not make anything red. "
+            "Any body part that becomes visible wears the same clothes and shoes as the "
+            "rest of that person, as seen in Picture 3. "
+            "Keep the room, background, lighting, camera framing and everything that is "
+            "not marked exactly as in Picture 1. "
+            "The black borders stay plain black. "
+            "Only what the lines mark may change: every person keeps the rest of their "
+            "body, their head, torso, arms and hands, exactly where it is in Picture 1."
+            "\n\nEdit Picture 1: floating legs.",
+        )
+
+    def test_it_never_speaks_the_cloud_vocabulary(self):
+        text = self.owned()
+        for leak in ("Image 1", "Image 2", "LOOK THINGS UP IN", "USER INSTRUCTION"):
+            self.assertNotIn(leak, text)
+        self.assertLess(len(text), 1200)
+
+    def test_without_a_reference_there_is_no_picture_three(self):
+        text = self.owned(roles={"cleanFrame", "annotatedFrame"})
+        self.assertNotIn("Picture 3", text)
+        self.assertIn("Picture 2", text)
+
+    def test_a_drawing_with_no_words_is_still_a_sentence(self):
+        text = self.owned(instruction="   ")
+        self.assertIn("Edit Picture 1 as the red lines in Picture 2 show.", text)
+        self.assertNotIn("Picture 1: .", text)
+
+    def test_a_trailing_full_stop_is_not_doubled(self):
+        self.assertTrue(self.owned("floating legs.").endswith("Edit Picture 1: floating legs."))
+
+    def test_the_instruction_is_last_and_the_body_lock_closes_the_rules(self):
+        """The two position changes the A/B paid for, guarded as positions."""
+        text = self.owned(flags={"@padded"})
+        self.assertTrue(text.endswith("Edit Picture 1: floating legs."), text)
+        rules = text.split("\n\n")[1]
+        self.assertTrue(rules.endswith("exactly where it is in Picture 1."), rules)
+
+    def test_the_border_sentence_only_when_padded(self):
+        self.assertNotIn("black borders", self.owned())
+        self.assertIn("black borders", self.owned(flags={"@padded"}))
+
+
 class TestTemplateSecurityLayer(BridgeTestCase):
     """Layer 1: every node, including the ones nothing reaches."""
 
@@ -2500,6 +2597,36 @@ class TestRunnerConfinement(BridgeTestCase):
         runner.delete_input("someone_elses_photo.png")
         self.assertTrue(victim.is_file())
 
+    def test_input_names_cannot_leave_the_input_folder(self):
+        """A prefix test let ``rb_x/../../photo.png`` through, to a read and to
+        the delete that cleans up after it."""
+        outside = Path(self._tmp.name) / "photo.png"
+        outside.write_bytes(b"private")
+        (self.inputs / "rb_x").mkdir()
+        for name in ("rb_x/../../photo.png", "rb_x\\..\\..\\photo.png",
+                     "rb_x/../../secret.txt", str(outside), "rb_../photo.png"):
+            with self.subTest(name=name):
+                with self.assertRaises(runner.RunError) as ctx:
+                    runner.read_input(name)
+                self.assertEqual(ctx.exception.code, "bad_input")
+                runner.delete_input(name)
+        self.assertEqual(outside.read_bytes(), b"private")
+        self.assertEqual(self.secret.read_text(), "private")
+
+    def test_values_refuse_image_slots_in_parameters(self):
+        from reanimator import server
+
+        cases = (
+            ("qwen-image-edit", "$IMAGE_1", "rb_probe/../../photo.png"),
+            ("ltx-23-keyframes", "$IMAGE_PATHS", ["rb_probe/../../photo.png"]),
+        )
+        for template_id, slot, value in cases:
+            with self.subTest(template=template_id), \
+                    self.assertRaises(binder.BindError) as ctx:
+                server._values_for(templates.get(template_id),
+                                   {"parameters": {"$PROMPT": "x", slot: value}})
+            self.assertEqual(ctx.exception.code, "image_via_parameters")
+
 
 class TestRunnerTransport(BridgeTestCase):
     """The bridge talks to ComfyUI in process, never over a port.
@@ -2961,6 +3088,26 @@ class TestImageEditEndToEnd(TemplateTestCase, unittest.IsolatedAsyncioTestCase):
                 self.assertGreaterEqual(response.status, 400)
         self.assertEqual(self.queued, [])
 
+    async def test_an_image_slot_cannot_be_named_through_parameters(self):
+        """The registry review's ARBITRARY_FILE_READ: a filename in parameters
+        reached the geometry step, which read the file outside input/, copied it
+        in and deleted the original -- all before the validator ran."""
+        outside = Path(self._tmp.name) / "private.png"
+        outside.write_bytes(tiny_png(64, 64))
+        client = await self.client()
+        for value in ("rb_probe/../../private.png", "rb_probe/../private.png",
+                      str(outside), "rb_deadbeefdeadbeef.png"):
+            with self.subTest(value=value):
+                response = await client.post(
+                    "/rb/v1/run",
+                    json={"templateId": "qwen-image-edit",
+                          "parameters": {"$PROMPT": "x", "$IMAGE_1": value}},
+                )
+                self.assertGreaterEqual(response.status, 400)
+        self.assertEqual(self.queued, [])
+        self.assertEqual(outside.read_bytes(), tiny_png(64, 64))
+        self.assertEqual([p.name for p in self.inputs.iterdir()], [])
+
     async def test_missing_model_is_reported_before_anything_is_queued(self):
         present = {
             v for node in self.graph.values() for v in node["inputs"].values()
@@ -3088,6 +3235,41 @@ class TestImageEditEndToEnd(TemplateTestCase, unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.status, 400)
         self.assertEqual((await response.json())["error"]["code"], "frame_size_mismatch")
         self.assertEqual(self.queued, [])
+
+    async def _composed(self, extra: dict) -> str:
+        client = await self.client()
+        for name in ("c", "a", "r"):
+            await client.put(f"/rb/v1/input/{name}", data=tiny_png(848, 478),
+                             headers={"Content-Type": "image/png"})
+        response = await client.post(
+            "/rb/v1/validate",
+            json={"templateId": "qwen-image-edit-2511-base", "intent": "edit_pose",
+                  "quality": "preview",
+                  "inputs": {"cleanFrame": "c", "annotatedFrame": "a", "contextFrames": ["r"]},
+                  "parameters": {"instruction": "CLOUD PROMPT WITH Image 1 AND Image 2"},
+                  **extra},
+        )
+        self.assertEqual(response.status, 200, await response.text())
+        return (await response.json())["composedPrompt"]
+
+    async def test_user_words_apart_get_the_templates_own_prompt(self):
+        """The editor still sends its cloud prompt as `instruction`, for older
+        bridges. With `userInstruction` beside it, none of that may reach Qwen."""
+        text = await self._composed({"userInstruction": "floating legs"})
+        self.assertTrue(text.endswith("Edit Picture 1: floating legs."), text)
+        self.assertNotIn("CLOUD PROMPT", text)
+        self.assertNotIn("Image 1", text)
+        # 848x478 is padded to the model's shape: said in the template's own
+        # words, and not with the legacy preamble bolted on top.
+        self.assertIn("The black borders stay plain black.", text)
+        self.assertNotIn("temporary padding", text)
+
+    async def test_without_user_words_the_legacy_prompt_is_untouched(self):
+        """An editor from before this change: nothing it relied on moves."""
+        text = await self._composed({})
+        self.assertTrue(text.startswith("The black border is temporary padding"), text)
+        self.assertTrue(text.endswith("CLOUD PROMPT WITH Image 1 AND Image 2"), text)
+        self.assertNotIn("Edit Picture 1:", text)
 
     async def test_more_context_frames_than_slots_is_refused_not_truncated(self):
         """This template has three image slots: the clean frame, the annotated
@@ -3897,6 +4079,105 @@ class TestAppBuilds(BridgeTestCase):
         }
         self.assertIn("GET", methods)
         self.assertIn("HEAD", methods)  # aiohttp adds it for us
+
+
+class TestMiniMaxH3FirstLastPreset(TemplateTestCase):
+    """The second local video preset: H3 animates from a start image, and to
+    an end image if there is one.
+
+    It serves the same intent as LTX with a different shape -- two image slots
+    instead of one list, and no per-key timing -- and each difference is a
+    place the contract could have broken without a sound.
+    """
+
+    def setUp(self) -> None:
+        super().setUp()
+        from reanimator import server
+
+        self.server = server
+        self.template = templates.get("minimax-h3-flf")
+        server._inputs.clear()
+        for i in range(3):
+            server._inputs[f"id{i}"] = {"file": f"rb_0000000{i}.png", "width": 64, "height": 64}
+
+    def tearDown(self) -> None:
+        self.server._inputs.clear()
+        super().tearDown()
+
+    def values(self, ids, frames=120):
+        return self.server._values_for(self.template, {
+            "intent": "video_from_keyframes",
+            "inputs": {"keyframes": ids},
+            "parameters": {
+                "instruction": "a fox runs",
+                # What the editor always sends, whichever preset ends up serving it.
+                "$SEQUENCER": [{"frame": 0}, {"frame": frames - 1}][: len(ids)],
+                "$FRAMES": frames,
+            },
+        })
+
+    def test_one_image_unplugs_the_last_frame(self):
+        """Fed a placeholder instead, the second LoadImage would fail the run
+        on a file that does not exist -- or worse, find one."""
+        values, _ = self.values(["id0"])
+        self.assertNotIn("$IMAGE_2", values)
+        self.assertIn(
+            {"slot": "$PROMPT", "input": "last_frame"},
+            self.template.detach_plan(set(values)),
+        )
+
+    def test_two_images_keep_the_last_frame(self):
+        values, _ = self.values(["id0", "id1"])
+        self.assertEqual(values["$IMAGE_2"], "rb_00000001.png")
+        self.assertEqual(self.template.detach_plan(set(values)), [])
+
+    def test_a_third_keyframe_is_refused_not_dropped(self):
+        """H3 first/last cannot place a key in the middle. Accepting three and
+        rendering two would lose the middle drawing without a word."""
+        with self.assertRaises(binder.BindError) as ctx:
+            self.values(["id0", "id1", "id2"])
+        self.assertEqual(ctx.exception.code, "too_many_inputs")
+
+    def test_the_timing_the_editor_sends_is_not_an_unknown_slot(self):
+        values, _ = self.values(["id0", "id1"])
+        self.assertNotIn("$SEQUENCER", values)
+
+    def test_length_rounds_up_to_the_17k_plus_5_grid(self):
+        for wanted, legal in ((120, 124), (124, 124), (125, 141), (24, 73), (360, 362)):
+            with self.subTest(wanted=wanted):
+                values, _ = self.values(["id0"], frames=wanted)
+                self.assertEqual(values["$FRAMES"], legal)
+
+    def test_it_passes_preflight_with_one_image(self):
+        values, _ = self.values(["id0"])
+        report = validate.validate(
+            self.template, values, fake_object_info(self.template.graph)
+        )
+        self.assertTrue(report.ok, [e.as_dict() for e in report.errors])
+        self.assertNotIn("last_frame", report.graph["11"]["inputs"])
+        self.assertEqual(report.graph["11"]["inputs"]["first_frame"], ["8", 0])
+
+    def test_the_editor_timeline_still_resolves_to_ltx(self):
+        """Priority 50 vs 100: adding H3 must not change what the editor's
+        Generate runs when nobody pins a preset."""
+        template, _ = templates.resolve_for_intent(
+            "video_from_keyframes", None, lambda *_: True
+        )
+        self.assertEqual(template.id, "ltx-23-keyframes")
+
+    def test_a_whole_role_removal_still_waits_for_the_whole_role(self):
+        """whenSlotAbsent is opt-in: a removal without it keeps the old meaning."""
+        manifest = {
+            "roles": {
+                "r": {
+                    "slots": ["$IMAGE_1", "$IMAGE_2"],
+                    "detachWhenAbsent": [{"slot": "$PROMPT", "input": "image2"}],
+                }
+            }
+        }
+        t = templates.Template(id="t", manifest=manifest, graph={}, hash="sha256:x")
+        self.assertEqual(t.detach_plan({"$IMAGE_1"}), [])
+        self.assertEqual(t.detach_plan(set()), [{"slot": "$PROMPT", "input": "image2"}])
 
 
 if __name__ == "__main__":

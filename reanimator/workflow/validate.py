@@ -699,6 +699,71 @@ def compose_prompt(
     return instruction or preamble
 
 
+def owns_prompt(template: Template, intent: str | None, user_instruction: Any) -> bool:
+    """Does this template write the WHOLE prompt for this intent?
+
+    Only when the editor sent the user's own words apart (``userInstruction``).
+    Without them the only instruction available is the editor's prompt, which
+    was written for the cloud models, and the legacy path has to keep appending
+    it -- an older editor must keep working against a newer bridge.
+
+    Why a template owns it at all: measured on a 3090 on 2026-09-11, Qwen 2511
+    given the ~700-word cloud prompt did not perform the edit (it painted a red
+    ribbon where the strokes were). A four-sentence prompt in its own
+    "Picture N" vocabulary put the drawn legs where they were drawn and left
+    the set alone. Each model gets the prompt it can follow.
+    """
+    if not isinstance(user_instruction, str):
+        return False
+    owned = (template.manifest.get("prompt") or {}).get("owned") or {}
+    return isinstance(owned.get(intent or ""), dict)
+
+
+def compose_owned_prompt(
+    template: Template,
+    user_instruction: str,
+    supplied_roles: set[str],
+    intent: str,
+    flags: set[str] | frozenset[str] = frozenset(),
+) -> str:
+    """The template's own prompt: preamble, rules, then the ask.
+
+    The three sections are separate because POSITION was measured to matter as
+    much as wording. Qwen 2511 obeys the end of the prompt hardest: moving the
+    user's instruction to the end stopped the strokes' red from turning into
+    red clothing, and moving the body-lock rule to the end of the rules stopped
+    the model re-posing the whole person. So the order here is load-bearing --
+    a line moved is a behaviour change, not a tidy-up.
+
+    ``flags`` are facts about the request that are not roles -- ``@padded``
+    when the bridge letterboxed the frame -- and they are matched by the same
+    ``when`` grammar, so one line can depend on both.
+
+    ``{instruction}`` is replaced inline. A line that needs it and gets an
+    empty instruction uses its ``withoutInstruction`` text instead: a drawing
+    with no words is a complete request, and "Edit Picture 1: ." is not.
+    """
+    spec = ((template.manifest.get("prompt") or {}).get("owned") or {})[intent]
+    roles = set(supplied_roles) | set(flags)
+    instruction = (user_instruction or "").strip().rstrip(" .")
+
+    def render(lines: Any) -> str:
+        out: list[str] = []
+        for line in lines or []:
+            if not isinstance(line, dict) or not _when_holds(line.get("when"), roles, intent):
+                continue
+            text = str(line.get("text") or "")
+            if "{instruction}" in text:
+                text = (text.replace("{instruction}", instruction) if instruction
+                        else str(line.get("withoutInstruction") or ""))
+            if text:
+                out.append(text)
+        return " ".join(out)
+
+    sections = (render(spec.get("preamble")), render(spec.get("body")), render(spec.get("ask")))
+    return "\n\n".join(p for p in sections if p)
+
+
 def check_after_pruning(
     graph: Mapping[str, Any],
     output_nodes: list[str],

@@ -15,9 +15,14 @@ Local generation is free on every plan.
 
 ## Install
 
-Search for **Reanimator Bridge** in ComfyUI Manager, install, and restart ComfyUI.
+ComfyUI Manager does not list the bridge yet (pending registry review). Until it does, pick one:
 
-Manual install:
+**Without a terminal.** Download the
+[ZIP](https://github.com/unluckyandlucky/comfyui-reanimator/archive/refs/heads/main.zip), open it
+and drag the `comfyui-reanimator-main` folder into `ComfyUI/custom_nodes`. Restart ComfyUI.
+Avoid Windows' *Extract All*: it nests the folder one level too deep and ComfyUI won't find it.
+
+**With git:**
 
 ```bash
 cd ComfyUI/custom_nodes

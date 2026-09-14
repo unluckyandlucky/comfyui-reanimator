@@ -23,6 +23,7 @@ import asyncio
 import inspect
 import logging
 import mimetypes
+import re
 import secrets
 import threading
 import time
@@ -36,6 +37,9 @@ log = logging.getLogger("reanimator.bridge")
 INPUT_PREFIX = "rb_"
 INPUT_SUFFIXES = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
                   ".webp": "image/webp"}
+# What write_input names a file, and so the only thing read_input and
+# delete_input will touch. Kept identical to validate.INPUT_FILENAME_RE.
+INPUT_NAME_RE = re.compile(r"^rb_[a-f0-9]{8,64}\.(png|jpg|jpeg|webp)$")
 MAX_INPUT_BYTES = 64 * 1024 * 1024
 MAX_INPUTS_PER_RUN = 16
 
@@ -290,19 +294,38 @@ def write_input(data: bytes, suffix: str) -> str:
     return name
 
 
+def _input_path(name: Any) -> Path | None:
+    """The file a bridge input name refers to, or None if it is not one.
+
+    A prefix test was the whole check here, and ``rb_x/../../photo.png`` passes
+    a prefix test: the Comfy-Org registry review found a paired client could
+    read a file outside input/ that way, and have the cleanup delete it. The
+    name must be exactly the shape write_input invents -- no separator, no dots
+    but the suffix -- and must still resolve inside the folder.
+    """
+    if not isinstance(name, str) or not INPUT_NAME_RE.match(name):
+        return None
+    directory = input_dir().resolve()
+    path = (directory / name).resolve()
+    if path.parent != directory:
+        return None
+    return path
+
+
 def read_input(name: str) -> bytes:
     """Read back a file this bridge wrote into ComfyUI's input folder."""
-    if not name.startswith(INPUT_PREFIX):
+    path = _input_path(name)
+    if path is None:
         raise RunError("Not a bridge input.", "bad_input")
-    return (input_dir() / name).read_bytes()
+    return path.read_bytes()
 
 
 def delete_input(name: str) -> None:
     """Best effort. A leftover input costs disk; a crash here costs the run."""
-    if not name.startswith(INPUT_PREFIX):
-        return
     try:
-        (input_dir() / name).unlink(missing_ok=True)
+        path = _input_path(name)
+        if path is not None:
+            path.unlink(missing_ok=True)
     except (OSError, ComfyUnavailable):
         pass
 
