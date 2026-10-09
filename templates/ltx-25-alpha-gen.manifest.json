@@ -1,0 +1,152 @@
+{
+  "id": "ltx-25-alpha-gen",
+  "name": "LTX-2.5 · Alpha Gen (matte from video)",
+  "model": "ltx-25-alpha-gen",
+  "kind": "video",
+  "version": 1,
+  "intents": {
+    "video_matte": {
+      "requires": [
+        "sourceVideo"
+      ],
+      "note": "Video in, alpha matte out (white = foreground), frame-aligned with the source. No prompt, no mask: the model picks the foreground itself."
+    }
+  },
+  "priority": 10,
+  "description": "Alpha matte for an RGB clip with Lightricks' Alpha Gen IC-LoRA on LTX-2.5 distilled: one stage at the source's own resolution. Handles hair, smoke, fire, glass and water. Made for the cloud GPU.",
+  "inputStrategy": "roles",
+  "images": 0,
+  "roles": {
+    "sourceVideo": {
+      "slot": "$VIDEO_1",
+      "required": true,
+      "max": 1,
+      "note": "The clip to matte. Up to 1920x1088 and 137 frames (145 with the padding): longer clips leak RGB into the matte (model card), so the caller splits them. The workflow pads 8 copies of the last frame, trims to 8n+1 and pads the size to a multiple of 32; the result is cropped back to the source's exact size and frame count."
+    }
+  },
+  "slots": {
+    "$VIDEO_1": {
+      "required": true,
+      "note": "source video"
+    },
+    "$SEED": {
+      "required": false,
+      "randomizePerRun": false
+    },
+    "$CHECKPOINT": {
+      "required": true,
+      "note": "chosen from requires.checkpoints, never by the caller"
+    },
+    "$OUTPUT": {
+      "required": true
+    }
+  },
+  "requires": {
+    "backends": [
+      "cuda"
+    ],
+    "nodes": [
+      "UNETLoader",
+      "CLIPLoader",
+      "VAELoader",
+      "CLIPTextEncode",
+      "LoadVideo",
+      "GetVideoComponents",
+      "GetImageSize",
+      "ImageFromBatch",
+      "ImagePadForOutpaint",
+      "ImageCrop",
+      "easy mathInt",
+      "LTXVConditioning",
+      "EmptyLTXVLatentVideo",
+      "LTXVEmptyLatentAudio",
+      "LTXVConcatAVLatent",
+      "LTXVSeparateAVLatent",
+      "LTXVCropGuides",
+      "LTXICLoRALoaderModelOnly",
+      "LTXAddVideoICLoRAGuide",
+      "RandomNoise",
+      "CFGGuider",
+      "KSamplerSelect",
+      "ManualSigmas",
+      "SamplerCustomAdvanced",
+      "VAEDecodeTiled",
+      "CreateVideo",
+      "SaveVideo",
+      "RepeatImageBatch",
+      "ImageBatch"
+    ],
+    "checkpoints": {
+      "slot": "$CHECKPOINT",
+      "variants": {
+        "int8_convrot": {
+          "folder": "diffusion_models",
+          "file": "ltx-2.5-22b-distilled-transformer-comfy-int8-convrot.safetensors",
+          "gb": 21.5,
+          "url": "https://huggingface.co/Lightricks/LTX-2.5/resolve/main/diffusion_models/ltx-2.5-22b-distilled-transformer-comfy-int8-convrot.safetensors",
+          "requiresNativeOps": [
+            "int8_tensorwise",
+            "convrot_w4a4"
+          ]
+        }
+      },
+      "preferred": "int8_convrot",
+      "alternatives": []
+    },
+    "models": [
+      {
+        "folder": "text_encoders",
+        "file": "gemma4-12b-with-proj-ltx-2.5-comfy-int8-convrot.safetensors",
+        "gb": 15.37,
+        "url": "https://huggingface.co/Lightricks/LTX-2.5/resolve/main/text_encoders/gemma4-12b-with-proj-ltx-2.5-comfy-int8-convrot.safetensors",
+        "note": "Encodes the empty prompt only, once per run."
+      },
+      {
+        "folder": "vae",
+        "file": "ltx-2.5-video-vae-bf16.safetensors",
+        "gb": 1.47,
+        "url": "https://huggingface.co/Lightricks/LTX-2.5/resolve/main/vae/ltx-2.5-video-vae-bf16.safetensors"
+      },
+      {
+        "folder": "vae",
+        "file": "ltx-2.5-audio-vae-bf16.safetensors",
+        "gb": 0.36,
+        "url": "https://huggingface.co/Lightricks/LTX-2.5/resolve/main/vae/ltx-2.5-audio-vae-bf16.safetensors",
+        "note": "Only to size the silent audio latent LTX-2.x samples alongside the video."
+      },
+      {
+        "folder": "loras",
+        "file": "ltx-2.5-22b-ic-lora-alpha-gen-0.9.safetensors",
+        "gb": 1.31,
+        "url": "https://huggingface.co/Lightricks/LTX-2.5-22b-IC-LoRA-Alpha-Gen/resolve/main/ltx-2.5-22b-ic-lora-alpha-gen-0.9.safetensors"
+      }
+    ],
+    "compatibility": {
+      "tier": "full",
+      "minimumVramGb": 48,
+      "note": "Full-HD 145-frame clips need an H100/B200-class GPU (model card). Meant for RunPod (RTX PRO 6000 / H100)."
+    },
+    "nodePacks": [
+      {
+        "name": "ComfyUI-LTXVideo",
+        "provides": [
+          "LTXICLoRALoaderModelOnly",
+          "LTXAddVideoICLoRAGuide"
+        ],
+        "note": "Lightricks' own pack; the IC-LoRA nodes are not in ComfyUI core."
+      },
+      {
+        "name": "comfyui-easy-use",
+        "provides": [
+          "easy mathInt"
+        ]
+      }
+    ]
+  },
+  "notes": [
+    "Weights are gated on Hugging Face (accept the LTX-2.x Community License); the downloader needs HF_TOKEN.",
+    "Output is a grayscale matte video at the source's size and fps. Compositing it as the alpha of the original clip is the caller's job."
+  ],
+  "tier": "full",
+  "minimumVramGb": 48
+}

@@ -19,8 +19,6 @@ const state = {
   port: null,
   deviceLabel: null,
   bridgeVersion: null,
-  projectRoot: null,
-  mediaCount: 0,
   pending: [],
   paired: [],
   // Requests the user already acted on, so a slow poll cannot re-open a dialog
@@ -299,54 +297,6 @@ function showSettingsPanel() {
       )
     );
 
-    // Project root -------------------------------------------------
-    const rootInput = el("input", {
-      className: "rb-input",
-      value: state.projectRoot || "",
-      placeholder: "D:\\Reanimator Projects",
-    });
-    body.append(
-      el("div", { style: "margin:20px 0 6px;font-weight:600" }, "Project folder"),
-      el(
-        "div",
-        { style: "color:#8b8b96;font-size:12px;margin-bottom:7px" },
-        "The only folder the editor may read media from. Your browser can never " +
-          "see paths outside it, and nothing here is uploaded anywhere."
-      ),
-      el(
-        "div",
-        { style: "display:flex;gap:8px" },
-        rootInput,
-        el(
-          "button",
-          {
-            className: "rb-btn",
-            onclick: async () => {
-              try {
-                const result = await api("/project-root", {
-                  method: "POST",
-                  body: JSON.stringify({ path: rootInput.value.trim() }),
-                });
-                state.projectRoot = result.projectRoot;
-                state.mediaCount = result.mediaCount || 0;
-                render();
-              } catch (error) {
-                alert(error.message);
-              }
-            },
-          },
-          "Set"
-        )
-      ),
-      state.projectRoot
-        ? el(
-            "div",
-            { style: "color:#8b8b96;font-size:12px;margin-top:7px" },
-            `${state.mediaCount} media file${state.mediaCount === 1 ? "" : "s"} found.`
-          )
-        : null
-    );
-
     // Development origins ------------------------------------------
     const devToggle = el("input", {
       type: "checkbox",
@@ -452,14 +402,6 @@ async function refresh() {
   } catch {
     state.port = null;
     return;
-  }
-
-  try {
-    const root = await api("/project-root");
-    state.projectRoot = root.projectRoot;
-    state.mediaCount = root.mediaCount || 0;
-  } catch {
-    /* the panel still works without a project root */
   }
 
   const next = state.pending.find((r) => !state.handled.has(r.requestId));

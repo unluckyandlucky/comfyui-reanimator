@@ -104,7 +104,7 @@
   "_meta": {"title": "Create Video"}
  },
  "20": {
-  "inputs": {"filename_prefix": "video/Reanimator_H3", "format": "auto", "codec": "auto", "video-preview": "", "video": ["19", 0]},
+  "inputs": {"filename_prefix": "video/Reanimator_H3", "format": "auto", "codec": "auto", "video": ["19", 0]},
   "class_type": "SaveVideo",
   "_meta": {"title": "$OUTPUT"}
  }

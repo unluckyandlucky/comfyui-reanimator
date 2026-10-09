@@ -27,18 +27,15 @@ from dataclasses import dataclass, field
 from typing import Any, Mapping
 
 from . import binder
-from .templates import Template
+from .templates import MODEL_SUFFIXES, Template
 
 # Files ComfyUI loads from a models folder. Used only to word the error: a
 # missing checkpoint is "install this model", a bad sampler name is "invalid
 # choice", and telling the user the wrong one wastes their afternoon.
-MODEL_SUFFIXES = (
-    ".safetensors", ".ckpt", ".pt", ".pth", ".bin", ".gguf", ".sft", ".onnx",
-)
 
 # The bridge generates every input filename itself (see comfy/runner.py). This
 # is what a legitimate one looks like; anything else is refused outright.
-INPUT_FILENAME_RE = re.compile(r"^rb_[a-f0-9]{8,64}\.(png|jpg|jpeg|webp)$")
+INPUT_FILENAME_RE = re.compile(r"^rb_[a-f0-9]{8,64}\.(png|jpg|jpeg|webp|mp4)$")
 
 MAX_PROMPT_LENGTH = 20000
 
@@ -465,7 +462,7 @@ def _check_parameters(
             continue                     # already reported as missing_slot
         family = binder.family_of(name)
 
-        if family == "image":
+        if family in ("image", "video"):
             if not isinstance(value, str) or not INPUT_FILENAME_RE.match(value):
                 report.error(
                     "bad_input_reference",
@@ -764,6 +761,113 @@ def compose_owned_prompt(
     return "\n\n".join(p for p in sections if p)
 
 
+def compose_camera_prompt(
+    template: Template, camera: Any
+) -> tuple[str | None, list[dict[str, Any]]]:
+    """The words half of :func:`compose_camera`, for presets that only talk."""
+    text, _, problems = compose_camera(template, camera)
+    return text, problems
+
+
+def compose_camera(
+    template: Template, camera: Any
+) -> tuple[str | None, dict[str, float], list[dict[str, Any]]]:
+    """Turn the editor's camera into this template's words and numbers.
+
+    An axis with ``slot`` is written as a number into that slot -- a model that
+    takes degrees gets degrees, and a range (``min``/``max``) outside which it
+    was never trained. An axis with buckets becomes words, as below.
+
+    Returns ``(prompt, slot_values, problems)``. ``prompt`` is None for a
+    preset with no ``camera.prompt``, and whenever there are problems.
+
+    The editor sends numbers -- ``{azimuth, elevation, distance, roll, panX,
+    panY}`` -- because what a model obeys is the preset's business: the
+    multiple-angles LoRA takes eight fixed azimuths, CrossView-Warp takes
+    degrees, the cloud models take prose. The manifest's ``camera.axes`` holds
+    that knowledge.
+
+    A problem is an axis the user moved that this preset cannot render. It is
+    refused, never dropped: a move that is silently ignored hands back the same
+    frame, which is exactly the bug this exists to fix. Movement inside an
+    axis's ``deadband`` is not a move. With ``camera.requiresMove`` a request
+    with no move at all is a problem too: re-rendering a shot from the camera it
+    already had costs minutes of GPU and returns what the user already has.
+    """
+    spec = template.manifest.get("camera") or {}
+    axes = spec.get("axes") or {}
+    cam = camera if isinstance(camera, Mapping) else {}
+    words: dict[str, str] = {}
+    slot_values: dict[str, float] = {}
+    problems: list[dict[str, Any]] = []
+    moved = False
+
+    for name, axis in axes.items():
+        if not isinstance(axis, Mapping):
+            continue
+        center = float(axis.get("center", 0))
+        try:
+            raw = float(cam.get(name, center))
+        except (TypeError, ValueError):
+            raw = center
+        if raw != raw or raw in (float("inf"), float("-inf")):   # NaN / inf
+            raw = center
+        offset = raw - center
+        size = abs(offset)
+        slot = axis.get("slot")
+        if size <= float(axis.get("deadband", 0)):
+            if axis.get("none") is not None:
+                words[name] = str(axis["none"])
+            if slot:
+                slot_values[str(slot)] = 0.0 if not axis.get("absolute") else raw
+            continue
+        moved = True
+        side = "positive" if offset > 0 else "negative"
+        message = (axis.get("unsupported") or {}).get(side)
+        if message:
+            problems.append({"axis": name, "value": raw, "message": str(message)})
+            continue
+        if slot:
+            low, high = axis.get("min"), axis.get("max")
+            value = raw if axis.get("absolute") else offset
+            if (isinstance(low, (int, float)) and value < low) or                (isinstance(high, (int, float)) and value > high):
+                problems.append({
+                    "axis": name, "value": raw,
+                    "message": str(axis.get("rangeMessage") or
+                                   f"This preset takes {name} from {low} to {high}."),
+                })
+                continue
+            slot_values[str(slot)] = round(value, 3)
+            continue
+        buckets = axis.get(side) or []
+        chosen = next(
+            (b for b in buckets if isinstance(b, Mapping) and size <= float(b.get("upTo", 0))),
+            None,
+        )
+        if chosen is None:
+            problems.append({
+                "axis": name, "value": raw,
+                "message": f"This preset cannot move the camera's {name} that far.",
+            })
+            continue
+        words[name] = str(chosen.get("text") or "")
+
+    if not moved and spec.get("requiresMove") and not problems:
+        problems.append({
+            "axis": None, "value": None,
+            "message": "Set a camera angle first: this would re-render the shot from the camera it already has.",
+        })
+    if problems:
+        return None, {}, problems
+    template_text = spec.get("prompt")
+    if not template_text:
+        return None, slot_values, problems
+    text = str(template_text)
+    for name, value in words.items():
+        text = text.replace("{" + name + "}", value)
+    return " ".join(text.split()), slot_values, problems
+
+
 def check_after_pruning(
     graph: Mapping[str, Any],
     output_nodes: list[str],
@@ -870,7 +974,7 @@ def validate(
     image_slots = {
         (slot.node_id, slot.widget)
         for name, slot in slots.items()
-        if slot.family == "image" and slot.widget and name in values
+        if slot.family in ("image", "video") and slot.widget and name in values
     }
     _check_widget_values(template, graph, object_info, report, image_slots, outputs)
 

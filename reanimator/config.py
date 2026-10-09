@@ -45,6 +45,32 @@ def allowed_origins() -> tuple[str, ...]:
     return (ALLOWED_ORIGIN, *DEV_ORIGINS) if dev_mode() else (ALLOWED_ORIGIN,)
 
 
+# Service mode: the bridge inside a cloud worker (RunPod), driven by a handler
+# in the same container instead of by a browser. There is no human to click
+# Allow there, so the credential is a secret handed over in the environment.
+SERVICE_TOKEN_ENV = "REANIMATOR_SERVICE_TOKEN"
+SERVICE_TOKEN_MIN_LENGTH = 32
+
+
+def service_token() -> str | None:
+    """The service-mode secret, or None when this is a normal desktop install.
+
+    A short value is refused rather than accepted: a token someone typed as
+    "test" would turn the bridge into an open door the moment the container
+    exposed the port, and nothing downstream would notice.
+    """
+    token = os.environ.get(SERVICE_TOKEN_ENV, "").strip()
+    if not token:
+        return None
+    if len(token) < SERVICE_TOKEN_MIN_LENGTH:
+        logging.getLogger("reanimator.bridge").error(
+            "%s is shorter than %d characters; service mode stays off.",
+            SERVICE_TOKEN_ENV, SERVICE_TOKEN_MIN_LENGTH,
+        )
+        return None
+    return token
+
+
 def _comfy_user_dir() -> Path:
     """ComfyUI's user directory, falling back to a sibling of this package."""
     try:

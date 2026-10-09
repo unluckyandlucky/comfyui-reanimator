@@ -118,6 +118,15 @@ async def cors_middleware(request: web.Request, handler: Handler) -> web.StreamR
             },
         )
 
+    # Service mode: the caller is the worker's handler, a process and not a
+    # page, so it sends no Origin and needs no CORS headers. It still has to get
+    # past auth_middleware with the service token like everything else.
+    if origin is None and config.service_token() is not None:
+        try:
+            return await handler(request)
+        except web.HTTPException as exc:
+            return exc
+
     # Defense in depth ONLY -- never authentication. A local process can forge
     # any Origin it likes. What actually protects the user is the combination of
     # binding 127.0.0.1, the bearer token, human-approved pairing, and the
@@ -151,14 +160,26 @@ async def cors_middleware(request: web.Request, handler: Handler) -> web.StreamR
 
 @web.middleware
 async def auth_middleware(request: web.Request, handler: Handler) -> web.StreamResponse:
+    service = config.service_token()
+    if service is not None:
+        # Nobody can approve a pairing inside a cloud worker, so the whole
+        # pairing surface is switched off rather than left reachable.
+        if request.path.startswith("/rb/v1/pair") or request.path.startswith("/rb/v1/token/"):
+            return _error("service_mode", "Pairing is disabled in service mode.", 404)
+        if request.headers.get("Origin") is None:
+            if request.path in PUBLIC_ROUTES:
+                return await handler(request)
+            header = request.headers.get("Authorization", "")
+            token = header[7:].strip() if header.lower().startswith("bearer ") else ""
+            if not secrets.compare_digest(token.encode(), service.encode()):
+                return _error("unauthenticated", "Bad service token.", 401)
+            request["paired"] = None
+            return await handler(request)
+
     if request.method == "OPTIONS" or request.path in PUBLIC_ROUTES:
         return await handler(request)
     # /rb/v1/pair/<id> is public: the browser polls it before it has a token.
     if request.path.startswith("/rb/v1/pair/"):
-        return await handler(request)
-    # /rb/v1/media/<capability> carries its own credential in the path, because
-    # <video src> cannot send an Authorization header. See media.py.
-    if request.path.startswith("/rb/v1/media/"):
         return await handler(request)
 
     header = request.headers.get("Authorization", "")
@@ -319,7 +340,7 @@ async def list_templates(_: web.Request) -> web.Response:
 
 @routes.put("/rb/v1/input/{input_id}")
 async def put_input(request: web.Request) -> web.Response:
-    """Raw image bytes, straight into ComfyUI's input/ folder."""
+    """Raw image or mp4 bytes, straight into ComfyUI's input/ folder."""
     input_id = request.match_info["input_id"]
     if not INPUT_ID_RE.match(input_id):
         return _error("bad_request", "Invalid input id.", 400)
@@ -329,21 +350,32 @@ async def put_input(request: web.Request) -> web.Response:
         "image/png": ".png",
         "image/jpeg": ".jpg",
         "image/webp": ".webp",
+        "video/mp4": ".mp4",
     }.get(content_type)
     if suffix is None:
         return _error(
             "bad_input_type",
-            f"Unsupported image type: {content_type or 'unknown'}",
+            f"Unsupported input type: {content_type or 'unknown'}",
             415,
         )
 
     data = await request.read()
+    # The declared type is the browser's word; the box header is the file's.
+    # An mp4 opens with an `ftyp` box, and anything else labelled video/mp4 is
+    # refused here rather than handed to a video decoder to find out.
+    if suffix == ".mp4" and data[4:8] != b"ftyp":
+        return _error("bad_input", "That is not an mp4 file.", 400)
     _drop_input(input_id)                     # replacing an id must not leak the old file
     if len(_inputs) >= MAX_INPUTS_HELD:
         for stale in list(_inputs)[: len(_inputs) - MAX_INPUTS_HELD + 1]:
             _drop_input(stale)
 
     filename = runner.write_input(data, suffix)
+    if suffix == ".mp4":
+        # Nothing downstream crops or pads a video by its size, so it is not
+        # measured: a size recorded here would be a number nobody reads.
+        _inputs[input_id] = {"file": filename, "width": 0, "height": 0, "kind": "video"}
+        return _json({"inputId": input_id, "bytes": len(data)})
     # Measured from the decoded image, never taken from the request: a declared
     # resolution that disagrees with the file would put every later crop off by
     # exactly the amount of the lie.
@@ -461,6 +493,11 @@ def _match_collected_sizes(
     for role in template.roles:
         if not template.role_collects(str(role)):
             continue
+        # A loader that takes each picture at its own size (H3 references:
+        # a character sheet next to a wide location shot) needs none of this,
+        # and the bars would reach the model as part of the reference.
+        if (template.roles.get(role) or {}).get("ownSize"):
+            continue
         slot = (template.role_slots(str(role)) or [None])[0]
         names = values.get(slot) if slot else None
         if not isinstance(names, list) or len(names) < 2:
@@ -532,7 +569,7 @@ def _values_for(
     values: dict[str, Any] = {}
     for name, value in (parameters or {}).items():
         if isinstance(name, str) and name.startswith("$"):
-            if name in image_slots or binder.family_of(name) in ("image", "imagelist"):
+            if name in image_slots or binder.family_of(name) in ("image", "imagelist", "video"):
                 raise BindError(
                     f"{name} takes an uploaded input, not a parameter.",
                     "image_via_parameters",
@@ -867,6 +904,23 @@ def _prepare(body: dict[str, Any], refresh: bool):
         intent_report.preset_fallback = preset_fallback
         return template, intent_report, values, None, intent
 
+    # A camera preset writes its prompt from the camera and from nothing else.
+    # Checked here, before the geometry step rewrites the uploads, so a move
+    # this preset cannot render is refused without consuming anything.
+    camera_prompt = None
+    if template.manifest.get("camera"):
+        camera_prompt, camera_values, problems = validate.compose_camera(
+            template, body.get("camera"))
+        # Written over anything the request put in the same slots: the camera
+        # is the one source of these numbers, not a second way to send them.
+        values.update(camera_values)
+        if problems:
+            report = validate.Report()
+            for problem in problems:
+                report.error("camera_unsupported", problem["message"], detail=problem)
+            report.preset_fallback = preset_fallback
+            return template, report, values, None, intent
+
     # Quality decides which branch runs, so it decides which files are needed.
     quality, fallback = template.resolve_quality(
         str(body.get("quality") or "final"), runner.model_exists
@@ -934,7 +988,12 @@ def _prepare(body: dict[str, Any], refresh: bool):
     # sends it, and either way the legacy path below still runs.
     user_instruction = body.get("userInstruction")
     padded = bool(transform and transform.has_padding)
-    if prompt_slot and instruction is not None:
+    if prompt_slot and camera_prompt is not None:
+        # The LoRA was trained on its own tag line and nothing around it. The
+        # cloud's camera prose, and the user's words with it, made the base
+        # model hand back the same frame: measured, see the manifest.
+        values[str(prompt_slot)] = camera_prompt
+    elif prompt_slot and instruction is not None:
         if validate.owns_prompt(template, intent, user_instruction):
             text = validate.compose_owned_prompt(
                 template, str(user_instruction), supplied, str(intent),
@@ -1097,81 +1156,14 @@ async def run_output(request: web.Request) -> web.StreamResponse:
 
 
 # --------------------------------------------------------------------------
-# Local media
-# --------------------------------------------------------------------------
-
-@routes.get("/rb/v1/project/media")
-async def project_media(_: web.Request) -> web.Response:
-    """List media under the user-authorized project root.
-
-    The browser cannot know a real path -- it only ever sees `ref`, a name
-    relative to the root, which is meaningless outside this bridge.
-    """
-    root = media.project_root()
-    if root is None:
-        return _error(
-            "no_project_root",
-            "No project folder chosen yet. Pick one in the Reanimator panel "
-            "inside ComfyUI.",
-            409,
-        )
-    return _json({"root": root.name, "items": media.list_media(root)})
-
-
-@routes.post("/rb/v1/project/media/grant")
-async def grant_media(request: web.Request) -> web.Response:
-    """Exchange a `ref` for an opaque, single-file, read-only capability URL."""
-    root = media.project_root()
-    if root is None:
-        return _error("no_project_root", "No project folder chosen yet.", 409)
-
-    body = await request.json()
-    ref = body.get("ref")
-    if not isinstance(ref, str):
-        return _error("bad_request", "Missing 'ref'.", 400)
-
-    path = media.resolve_within(root, ref)
-    cap = media.capabilities.grant(path)
-    return _json(
-        {
-            "capabilityId": cap.id,
-            "url": f"/rb/v1/media/{cap.id}",
-            "mime": cap.mime,
-            "bytes": cap.size,
-            "expiresAt": cap.expires_at,
-        }
-    )
-
-
-@routes.post("/rb/v1/project/media/revoke")
-async def revoke_media(request: web.Request) -> web.Response:
-    body = await request.json()
-    capability_id = body.get("capabilityId")
-    if capability_id is None:
-        return _json({"revoked": media.capabilities.revoke_all()})
-    return _json({"revoked": media.capabilities.revoke(str(capability_id))})
-
-
-@routes.get("/rb/v1/media/{capability_id}")
-async def read_media(request: web.Request) -> web.StreamResponse:
-    """Range-aware read. The capability id in the path IS the credential.
-
-    No @routes.head here: aiohttp registers HEAD alongside every GET, and adding
-    it explicitly raises "method HEAD is already registered" at startup.
-    media.serve() checks request.method, so HEAD is handled either way.
-    """
-    cap = media.capabilities.resolve(request.match_info["capability_id"])
-    return await media.serve(request, cap)
-
-
-# --------------------------------------------------------------------------
 # Local project storage  (docs/contract-local-project-storage.md)
 #
-# NOT the same thing as /rb/v1/project/media above, despite the one letter
-# between them. That one LISTS a folder the user authorized us to read; this
-# one WRITES the project's own bytes into a folder the bridge owns. Local GPU
+# Writes the project's own bytes into a folder the bridge owns. Local GPU
 # promised the user's material never leaves the machine, and this is the half
-# that gives it somewhere to land.
+# that gives it somewhere to land. (There used to be a second, read-only half:
+# a folder of the user's own media, authorized from the ComfyUI panel. Nothing
+# used it, and a panel route that points the bridge at any folder is exactly
+# what a reviewer reads as an arbitrary file read, so it is gone.)
 #
 # Every route here is token-gated like the rest of /rb/v1: /rb/v1/projects/ is
 # not in PUBLIC_ROUTES and matches neither of auth_middleware's prefix

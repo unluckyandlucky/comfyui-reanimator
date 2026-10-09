@@ -1,0 +1,444 @@
+{
+  "1": {
+    "class_type": "UNETLoader",
+    "inputs": {
+      "unet_name": "ltx-2.5-22b-distilled-transformer-comfy-int8-convrot.safetensors",
+      "weight_dtype": "default"
+    },
+    "_meta": {
+      "title": "$CHECKPOINT:unet_name"
+    }
+  },
+  "3": {
+    "class_type": "CLIPLoader",
+    "inputs": {
+      "clip_name": "gemma4-12b-with-proj-ltx-2.5-comfy-int8-convrot.safetensors",
+      "type": "ltxv",
+      "device": "default"
+    },
+    "_meta": {
+      "title": "Gemma 4 text encoder"
+    }
+  },
+  "4": {
+    "class_type": "CLIPTextEncode",
+    "inputs": {
+      "text": "",
+      "clip": [
+        "3",
+        0
+      ]
+    },
+    "_meta": {
+      "title": "$PROMPT:text"
+    }
+  },
+  "5": {
+    "class_type": "VAELoader",
+    "inputs": {
+      "vae_name": "ltx-2.5-video-vae-bf16.safetensors"
+    }
+  },
+  "6": {
+    "class_type": "VAELoader",
+    "inputs": {
+      "vae_name": "ltx-2.5-audio-vae-bf16.safetensors"
+    }
+  },
+  "10": {
+    "class_type": "LoadVideo",
+    "inputs": {
+      "file": "example.mp4"
+    },
+    "_meta": {
+      "title": "$VIDEO_1"
+    }
+  },
+  "11": {
+    "class_type": "GetVideoComponents",
+    "inputs": {
+      "video": [
+        "10",
+        0
+      ]
+    }
+  },
+  "12": {
+    "class_type": "GetImageSize",
+    "inputs": {
+      "image": [
+        "11",
+        0
+      ]
+    }
+  },
+  "60": {
+    "class_type": "PrimitiveInt",
+    "inputs": {
+      "value": 49
+    },
+    "_meta": {
+      "title": "$CONTEXT:value"
+    }
+  },
+  "61": {
+    "class_type": "easy mathInt",
+    "inputs": {
+      "a": [
+        "12",
+        2
+      ],
+      "b": [
+        "60",
+        0
+      ],
+      "operation": "subtract"
+    }
+  },
+  "13": {
+    "class_type": "ImageFromBatch",
+    "inputs": {
+      "image": [
+        "11",
+        0
+      ],
+      "batch_index": [
+        "61",
+        0
+      ],
+      "length": [
+        "60",
+        0
+      ]
+    }
+  },
+  "62": {
+    "class_type": "PrimitiveInt",
+    "inputs": {
+      "value": 113
+    },
+    "_meta": {
+      "title": "$FRAMES:value"
+    }
+  },
+  "20": {
+    "class_type": "easy mathInt",
+    "inputs": {
+      "a": [
+        "12",
+        0
+      ],
+      "b": 32,
+      "operation": "modulo"
+    }
+  },
+  "21": {
+    "class_type": "easy mathInt",
+    "inputs": {
+      "a": 32,
+      "b": [
+        "20",
+        0
+      ],
+      "operation": "subtract"
+    }
+  },
+  "22": {
+    "class_type": "easy mathInt",
+    "inputs": {
+      "a": [
+        "21",
+        0
+      ],
+      "b": 32,
+      "operation": "modulo"
+    }
+  },
+  "23": {
+    "class_type": "easy mathInt",
+    "inputs": {
+      "a": [
+        "12",
+        1
+      ],
+      "b": 32,
+      "operation": "modulo"
+    }
+  },
+  "24": {
+    "class_type": "easy mathInt",
+    "inputs": {
+      "a": 32,
+      "b": [
+        "23",
+        0
+      ],
+      "operation": "subtract"
+    }
+  },
+  "25": {
+    "class_type": "easy mathInt",
+    "inputs": {
+      "a": [
+        "24",
+        0
+      ],
+      "b": 32,
+      "operation": "modulo"
+    }
+  },
+  "14": {
+    "class_type": "ImagePadForOutpaint",
+    "inputs": {
+      "image": [
+        "13",
+        0
+      ],
+      "left": 0,
+      "top": 0,
+      "right": [
+        "22",
+        0
+      ],
+      "bottom": [
+        "25",
+        0
+      ],
+      "feathering": 0
+    }
+  },
+  "15": {
+    "class_type": "GetImageSize",
+    "inputs": {
+      "image": [
+        "14",
+        0
+      ]
+    }
+  },
+  "30": {
+    "class_type": "LTXVConditioning",
+    "inputs": {
+      "positive": [
+        "4",
+        0
+      ],
+      "negative": [
+        "4",
+        0
+      ],
+      "frame_rate": [
+        "11",
+        2
+      ]
+    }
+  },
+  "31": {
+    "class_type": "EmptyLTXVLatentVideo",
+    "inputs": {
+      "width": [
+        "15",
+        0
+      ],
+      "height": [
+        "15",
+        1
+      ],
+      "length": [
+        "62",
+        0
+      ],
+      "batch_size": 1
+    }
+  },
+  "32": {
+    "class_type": "LTXVImgToVideoInplace",
+    "inputs": {
+      "vae": [
+        "5",
+        0
+      ],
+      "image": [
+        "14",
+        0
+      ],
+      "latent": [
+        "31",
+        0
+      ],
+      "strength": 1.0,
+      "bypass": false
+    },
+    "_meta": {
+      "title": "Pin the clip's tail"
+    }
+  },
+  "33": {
+    "class_type": "LTXVEmptyLatentAudio",
+    "inputs": {
+      "frames_number": [
+        "62",
+        0
+      ],
+      "frame_rate": [
+        "11",
+        2
+      ],
+      "batch_size": 1,
+      "audio_vae": [
+        "6",
+        0
+      ]
+    }
+  },
+  "34": {
+    "class_type": "LTXVConcatAVLatent",
+    "inputs": {
+      "video_latent": [
+        "32",
+        0
+      ],
+      "audio_latent": [
+        "33",
+        0
+      ]
+    }
+  },
+  "40": {
+    "class_type": "RandomNoise",
+    "inputs": {
+      "noise_seed": 1234
+    },
+    "_meta": {
+      "title": "$SEED:noise_seed"
+    }
+  },
+  "41": {
+    "class_type": "CFGGuider",
+    "inputs": {
+      "model": [
+        "1",
+        0
+      ],
+      "positive": [
+        "30",
+        0
+      ],
+      "negative": [
+        "30",
+        1
+      ],
+      "cfg": 1.0
+    }
+  },
+  "42": {
+    "class_type": "KSamplerSelect",
+    "inputs": {
+      "sampler_name": "euler_ancestral"
+    }
+  },
+  "43": {
+    "class_type": "ManualSigmas",
+    "inputs": {
+      "sigmas": "1.0, 0.99375, 0.9875, 0.98125, 0.975, 0.909375, 0.725, 0.421875, 0.0"
+    }
+  },
+  "44": {
+    "class_type": "SamplerCustomAdvanced",
+    "inputs": {
+      "noise": [
+        "40",
+        0
+      ],
+      "guider": [
+        "41",
+        0
+      ],
+      "sampler": [
+        "42",
+        0
+      ],
+      "sigmas": [
+        "43",
+        0
+      ],
+      "latent_image": [
+        "34",
+        0
+      ]
+    }
+  },
+  "45": {
+    "class_type": "LTXVSeparateAVLatent",
+    "inputs": {
+      "av_latent": [
+        "44",
+        0
+      ]
+    }
+  },
+  "50": {
+    "class_type": "VAEDecodeTiled",
+    "inputs": {
+      "samples": [
+        "45",
+        0
+      ],
+      "vae": [
+        "5",
+        0
+      ],
+      "tile_size": 512,
+      "overlap": 64,
+      "temporal_size": 512,
+      "temporal_overlap": 8
+    }
+  },
+  "51": {
+    "class_type": "ImageCrop",
+    "inputs": {
+      "image": [
+        "50",
+        0
+      ],
+      "width": [
+        "12",
+        0
+      ],
+      "height": [
+        "12",
+        1
+      ],
+      "x": 0,
+      "y": 0
+    }
+  },
+  "52": {
+    "class_type": "CreateVideo",
+    "inputs": {
+      "images": [
+        "51",
+        0
+      ],
+      "fps": [
+        "11",
+        2
+      ]
+    }
+  },
+  "53": {
+    "class_type": "SaveVideo",
+    "inputs": {
+      "filename_prefix": "video/Reanimator_extend",
+      "format": "auto",
+      "codec": "auto",
+      "video": [
+        "52",
+        0
+      ]
+    },
+    "_meta": {
+      "title": "$OUTPUT"
+    }
+  }
+}

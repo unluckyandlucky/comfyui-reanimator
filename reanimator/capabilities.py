@@ -11,7 +11,7 @@ from typing import Any
 
 from . import config, projects
 
-BRIDGE_VERSION = "0.1.0"
+BRIDGE_VERSION = "0.1.4"
 PROTOCOL_VERSION = 1
 
 # Commands this build understands. The editor reads this and degrades instead of

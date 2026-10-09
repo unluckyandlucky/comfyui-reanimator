@@ -1,0 +1,169 @@
+{
+  "id": "ltx-25-upscale-x2",
+  "name": "LTX-2.5 · Pixel Upscaler x2 (generative)",
+  "model": "ltx-25-upscale-x2",
+  "kind": "video",
+  "version": 1,
+  "intents": {
+    "video_upscale_x2": {
+      "requires": [
+        "sourceVideo"
+      ],
+      "note": "Video in, the same shot at twice the width and height with synthesized detail. Meant for low-resolution drafts, not for faithful upscaling of live action."
+    }
+  },
+  "priority": 10,
+  "description": "Generative 2x upscale with Lightricks' Pixel Spatial Upscaler IC-LoRA on LTX-2.5 distilled: the clip is the reference at half the output size (the LoRA's reference_downscale_factor). Made for the cloud GPU.",
+  "inputStrategy": "roles",
+  "images": 0,
+  "roles": {
+    "sourceVideo": {
+      "slot": "$VIDEO_1",
+      "required": true,
+      "max": 1,
+      "note": "A clean low-resolution clip (about 280p to 540p). The output is twice its size; the workflow pads to a multiple of 32 and crops the doubled padding back off."
+    }
+  },
+  "slots": {
+    "$VIDEO_1": {
+      "required": true,
+      "note": "source video"
+    },
+    "$PROMPT": {
+      "required": true
+    },
+    "$NEGATIVE": {
+      "required": false,
+      "note": "Has no effect at cfg 1 (the distilled schedule)."
+    },
+    "$SEED": {
+      "required": false,
+      "randomizePerRun": false
+    },
+    "$CHECKPOINT": {
+      "required": true,
+      "note": "chosen from requires.checkpoints, never by the caller"
+    },
+    "$OUTPUT": {
+      "required": true
+    }
+  },
+  "requires": {
+    "backends": [
+      "cuda"
+    ],
+    "nodes": [
+      "CFGGuider",
+      "CLIPLoader",
+      "CLIPTextEncode",
+      "CreateVideo",
+      "EmptyLTXVLatentVideo",
+      "GetImageSize",
+      "GetVideoComponents",
+      "ImageBatch",
+      "ImageCrop",
+      "ImageFromBatch",
+      "ImagePadForOutpaint",
+      "KSamplerSelect",
+      "LTXAddVideoICLoRAGuide",
+      "LTXICLoRALoaderModelOnly",
+      "LTXVConcatAVLatent",
+      "LTXVConditioning",
+      "LTXVCropGuides",
+      "LTXVEmptyLatentAudio",
+      "LTXVSeparateAVLatent",
+      "LoadVideo",
+      "ManualSigmas",
+      "RandomNoise",
+      "RepeatImageBatch",
+      "SamplerCustomAdvanced",
+      "SaveVideo",
+      "UNETLoader",
+      "VAEDecodeTiled",
+      "VAELoader",
+      "easy mathInt"
+    ],
+    "checkpoints": {
+      "slot": "$CHECKPOINT",
+      "variants": {
+        "int8_convrot": {
+          "folder": "diffusion_models",
+          "file": "ltx-2.5-22b-distilled-transformer-comfy-int8-convrot.safetensors",
+          "gb": 21.5,
+          "url": "https://huggingface.co/Lightricks/LTX-2.5/resolve/main/diffusion_models/ltx-2.5-22b-distilled-transformer-comfy-int8-convrot.safetensors",
+          "requiresNativeOps": [
+            "int8_tensorwise",
+            "convrot_w4a4"
+          ]
+        }
+      },
+      "preferred": "int8_convrot",
+      "alternatives": []
+    },
+    "models": [
+      {
+        "folder": "text_encoders",
+        "file": "gemma4-12b-with-proj-ltx-2.5-comfy-int8-convrot.safetensors",
+        "gb": 15.37,
+        "url": "https://huggingface.co/Lightricks/LTX-2.5/resolve/main/text_encoders/gemma4-12b-with-proj-ltx-2.5-comfy-int8-convrot.safetensors",
+        "note": "Encodes the empty prompt only, once per run."
+      },
+      {
+        "folder": "vae",
+        "file": "ltx-2.5-video-vae-bf16.safetensors",
+        "gb": 1.47,
+        "url": "https://huggingface.co/Lightricks/LTX-2.5/resolve/main/vae/ltx-2.5-video-vae-bf16.safetensors"
+      },
+      {
+        "folder": "vae",
+        "file": "ltx-2.5-audio-vae-bf16.safetensors",
+        "gb": 0.36,
+        "url": "https://huggingface.co/Lightricks/LTX-2.5/resolve/main/vae/ltx-2.5-audio-vae-bf16.safetensors",
+        "note": "Only to size the silent audio latent LTX-2.x samples alongside the video."
+      },
+      {
+        "folder": "loras",
+        "file": "ltx-2.5-22b-ic-lora-pixel-spatial-upscaler-x2-1.0.safetensors",
+        "gb": 0.33,
+        "url": "https://huggingface.co/Lightricks/LTX-2.5-22b-IC-LoRA-Pixel-Spatial-Upscaler/resolve/main/ltx-2.5-22b-ic-lora-pixel-spatial-upscaler-x2-1.0.safetensors"
+      }
+    ],
+    "compatibility": {
+      "tier": "full",
+      "minimumVramGb": 48,
+      "note": "Full-HD 145-frame clips need an H100/B200-class GPU (model card). Meant for RunPod (RTX PRO 6000 / H100)."
+    },
+    "nodePacks": [
+      {
+        "name": "ComfyUI-LTXVideo",
+        "provides": [
+          "LTXAddVideoICLoRAGuide",
+          "LTXICLoRALoaderModelOnly"
+        ],
+        "note": "Lightricks' own pack; the IC-LoRA nodes are not in ComfyUI core."
+      },
+      {
+        "name": "comfyui-easy-use",
+        "provides": [
+          "easy mathInt"
+        ]
+      }
+    ]
+  },
+  "notes": [
+    "Built by tools/build_ltx25_iclora_templates.py; edit that script, not this file.",
+    "Weights are gated on Hugging Face: each IC-LoRA repo has its own license gate to accept."
+  ],
+  "tier": "full",
+  "minimumVramGb": 48,
+  "prompt": {
+    "slot": "$PROMPT",
+    "instructionParameter": "instruction",
+    "lines": [
+      {
+        "text": "sharp photographic detail, crisp natural texture, clean edges, high resolution footage"
+      }
+    ],
+    "note": "A generic rendering description; the user's words follow it."
+  }
+}

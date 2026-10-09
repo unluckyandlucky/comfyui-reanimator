@@ -3,7 +3,9 @@
 ComfyUI imports this at startup. We register the panel API on its server and
 start our own loopback server for the browser-facing API.
 
-This package intentionally exports no nodes: it is a service, not a node pack.
+It is a service first. The one node it exports, ReanimatorH3Sequencer, exists
+because the minimax-h3-keyframes template needs a variable number of keys and
+a template cannot chain a variable number of nodes (see reanimator/nodes.py).
 """
 
 from __future__ import annotations
@@ -11,10 +13,9 @@ from __future__ import annotations
 import asyncio
 import logging
 
-log = logging.getLogger("reanimator.bridge")
+from .reanimator.nodes import NODE_CLASS_MAPPINGS, NODE_DISPLAY_NAME_MAPPINGS
 
-NODE_CLASS_MAPPINGS: dict = {}
-NODE_DISPLAY_NAME_MAPPINGS: dict = {}
+log = logging.getLogger("reanimator.bridge")
 WEB_DIRECTORY = "./web"
 
 __all__ = ["NODE_CLASS_MAPPINGS", "NODE_DISPLAY_NAME_MAPPINGS", "WEB_DIRECTORY"]

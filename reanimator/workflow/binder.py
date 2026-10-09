@@ -33,6 +33,10 @@ from typing import Any, Iterable, Mapping
 
 SLOT_RE = re.compile(r"^\$([A-Z][A-Z0-9_]*?)(?:_(\d+))?(?::([A-Za-z0-9_]+))?$")
 IMAGE_SLOT_RE = re.compile(r"^\$IMAGE_(\d+)$")
+# A whole clip going in, not a frame: the shot a camera move re-renders. Kept
+# apart from $IMAGE_n so an image slot can never be handed a video, and so the
+# geometry step, which pads pictures, never touches one.
+VIDEO_SLOT_RE = re.compile(r"^\$VIDEO_(\d+)$")
 # One widget holding many filenames, one per line. A basename and nothing else:
 # the loader that reads this widget tries the string as an absolute path FIRST
 # and only then falls back to ComfyUI's input folder, so a value with a
@@ -51,6 +55,7 @@ SEQUENCER_TIMING_RE = re.compile(r"^(?:insert_frame|insert_second|strength)_(\d+
 # on the node and is not already wired to another node wins.
 TEXT_WIDGETS = ("prompt", "text", "string", "value")
 IMAGE_WIDGETS = ("image", "image_path", "filename")
+VIDEO_WIDGETS = ("video", "file")
 IMAGELIST_WIDGETS = ("image_paths", "images", "paths")
 SEED_WIDGETS = ("seed", "noise_seed", "rand_seed")
 
@@ -67,6 +72,7 @@ OUTPUT_CLASSES = (
     "PreviewImage",
 )
 IMAGE_INPUT_CLASSES = ("LoadImage", "LoadImageOutput", "LoadImageMask")
+VIDEO_INPUT_CLASSES = ("VHS_LoadVideo", "LoadVideo")
 
 SCALAR_TYPES = (str, int, float, bool)
 MAX_TEXT_LENGTH = 20000
@@ -183,6 +189,8 @@ def parse_slot_titles(title: str) -> list[tuple[str, str | None]]:
 def family_of(slot_name: str) -> str:
     if IMAGE_SLOT_RE.match(slot_name):
         return "image"
+    if VIDEO_SLOT_RE.match(slot_name):
+        return "video"
     if slot_name in ("$PROMPT", "$NEGATIVE"):
         return "text"
     if slot_name == "$SEED":
@@ -199,6 +207,7 @@ def family_of(slot_name: str) -> str:
 def _pick_widget(node: Mapping[str, Any], family: str) -> str | None:
     candidates = {
         "image": IMAGE_WIDGETS,
+        "video": VIDEO_WIDGETS,
         "imagelist": IMAGELIST_WIDGETS,
         "text": TEXT_WIDGETS,
         "seed": SEED_WIDGETS,
@@ -256,6 +265,15 @@ def _duck(
             (node_id, node)
             for node_id, node in nodes
             if node.get("class_type") in IMAGE_INPUT_CLASSES
+        ]
+        return loaders[index - 1] if 0 < index <= len(loaders) else None
+
+    if family == "video":
+        index = int(VIDEO_SLOT_RE.match(slot_name).group(1))  # type: ignore[union-attr]
+        loaders = [
+            (node_id, node)
+            for node_id, node in nodes
+            if node.get("class_type") in VIDEO_INPUT_CLASSES
         ]
         return loaders[index - 1] if 0 < index <= len(loaders) else None
 

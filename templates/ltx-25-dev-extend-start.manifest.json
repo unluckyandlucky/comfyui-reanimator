@@ -1,0 +1,207 @@
+{
+  "id": "ltx-25-dev-extend-start",
+  "name": "LTX-2.5 dev · Extend backwards (what came before a clip)",
+  "model": "ltx-25-dev-extend-start",
+  "kind": "video",
+  "version": 1,
+  "intents": {
+    "video_extend_start": {
+      "requires": [
+        "sourceVideo"
+      ],
+      "note": "Send the START of the shot: the template keeps its first $CONTEXT frames."
+    }
+  },
+  "priority": 10,
+  "description": "The frames before a clip: its opening is reversed, continued with LTX-2.5 dev and turned forwards again, so the new part leads into the clip's first frame.",
+  "inputStrategy": "roles",
+  "images": 0,
+  "roles": {
+    "sourceVideo": {
+      "slot": "$VIDEO_1",
+      "required": true,
+      "max": 1,
+      "note": "The clip to lead into. Only its first $CONTEXT frames reach the model."
+    }
+  },
+  "slots": {
+    "$VIDEO_1": {
+      "required": true,
+      "note": "source video"
+    },
+    "$CONTEXT": {
+      "required": false,
+      "note": "frames of the clip's tail kept as context; 8n+1 (49 = 2 s at 24 fps), no more than the clip has"
+    },
+    "$FRAMES": {
+      "required": true,
+      "note": "output length, context included; rounded up to 8n+1"
+    },
+    "$PROMPT": {
+      "required": false
+    },
+    "$SEED": {
+      "required": false,
+      "randomizePerRun": true
+    },
+    "$CHECKPOINT": {
+      "required": true,
+      "note": "chosen from requires.checkpoints, never by the caller"
+    },
+    "$OUTPUT": {
+      "required": true
+    },
+    "$NEGATIVE": {
+      "required": false
+    },
+    "$CFG": {
+      "required": false
+    },
+    "$STEPS": {
+      "required": false
+    }
+  },
+  "requires": {
+    "backends": [
+      "cuda"
+    ],
+    "nodes": [
+      "UNETLoader",
+      "CLIPLoader",
+      "VAELoader",
+      "CLIPTextEncode",
+      "LoadVideo",
+      "GetVideoComponents",
+      "GetImageSize",
+      "ImageFromBatch",
+      "ImagePadForOutpaint",
+      "ImageCrop",
+      "easy mathInt",
+      "LTXVConditioning",
+      "EmptyLTXVLatentVideo",
+      "LTXVEmptyLatentAudio",
+      "LTXVConcatAVLatent",
+      "LTXVSeparateAVLatent",
+      "RandomNoise",
+      "CFGGuider",
+      "KSamplerSelect",
+      "ManualSigmas",
+      "SamplerCustomAdvanced",
+      "VAEDecodeTiled",
+      "CreateVideo",
+      "SaveVideo",
+      "LTXVImgToVideoInplace",
+      "PrimitiveInt",
+      "LTXVScheduler",
+      "LTXVLatentUpsampler",
+      "LatentUpscaleModelLoader",
+      "ImageScale",
+      "ReverseImageBatch"
+    ],
+    "checkpoints": {
+      "slot": "$CHECKPOINT",
+      "variants": {
+        "int8_convrot": {
+          "folder": "diffusion_models",
+          "file": "ltx-2.5-22b-dev-transformer-comfy-int8-convrot.safetensors",
+          "gb": 21.5,
+          "url": "https://huggingface.co/Lightricks/LTX-2.5/resolve/main/diffusion_models/ltx-2.5-22b-dev-transformer-comfy-int8-convrot.safetensors",
+          "requiresNativeOps": [
+            "int8_tensorwise",
+            "convrot_w4a4"
+          ]
+        }
+      },
+      "preferred": "int8_convrot",
+      "alternatives": []
+    },
+    "models": [
+      {
+        "folder": "text_encoders",
+        "file": "gemma4-12b-with-proj-ltx-2.5-comfy-int8-convrot.safetensors",
+        "gb": 15.37,
+        "url": "https://huggingface.co/Lightricks/LTX-2.5/resolve/main/text_encoders/gemma4-12b-with-proj-ltx-2.5-comfy-int8-convrot.safetensors",
+        "note": "Encodes the empty prompt only, once per run."
+      },
+      {
+        "folder": "vae",
+        "file": "ltx-2.5-video-vae-bf16.safetensors",
+        "gb": 1.47,
+        "url": "https://huggingface.co/Lightricks/LTX-2.5/resolve/main/vae/ltx-2.5-video-vae-bf16.safetensors"
+      },
+      {
+        "folder": "vae",
+        "file": "ltx-2.5-audio-vae-bf16.safetensors",
+        "gb": 0.36,
+        "url": "https://huggingface.co/Lightricks/LTX-2.5/resolve/main/vae/ltx-2.5-audio-vae-bf16.safetensors",
+        "note": "Only to size the silent audio latent LTX-2.x samples alongside the video."
+      },
+      {
+        "folder": "diffusion_models",
+        "file": "ltx-2.5-22b-distilled-transformer-comfy-int8-convrot.safetensors",
+        "gb": 21.5,
+        "note": "the refine stage"
+      },
+      {
+        "folder": "latent_upscale_models",
+        "file": "ltx-2.5-latent-spatial-upscaler-x2-bf16-1.0.safetensors",
+        "gb": 1.0,
+        "url": "https://huggingface.co/Lightricks/LTX-2.5/resolve/main/latent_upscale_models/ltx-2.5-latent-spatial-upscaler-x2-bf16-1.0.safetensors"
+      }
+    ],
+    "compatibility": {
+      "tier": "full",
+      "minimumVramGb": 48,
+      "note": "Full-HD 145-frame clips need an H100/B200-class GPU (model card). Meant for RunPod (RTX PRO 6000 / H100)."
+    },
+    "nodePacks": [
+      {
+        "name": "ComfyUI-LTXVideo",
+        "provides": [
+          "LTXICLoRALoaderModelOnly",
+          "LTXAddVideoICLoRAGuide"
+        ],
+        "note": "Lightricks' own pack; the IC-LoRA nodes are not in ComfyUI core."
+      },
+      {
+        "name": "comfyui-easy-use",
+        "provides": [
+          "easy mathInt"
+        ]
+      },
+      {
+        "name": "ComfyUI-KJNodes",
+        "provides": [
+          "ReverseImageBatch"
+        ],
+        "note": "Already in the cloud image (Dockerfile) for the LTX 2.3 graph."
+      }
+    ]
+  },
+  "notes": [
+    "Both 2.5 transformers load (dev for stage 1, distilled for the refine): ~43 GB of weights, made for the 80-96 GB cloud GPUs.",
+    "No official dev recipe in the model card; steps/CFG follow LTX-2's two-stage pipeline (dev with CFG, then distilled refine with sigmas 0.85/0.725/0.4219).",
+    "The output ends with the $CONTEXT frames re-decoded; the caller drops them and keeps the rest.",
+    "Write the prompt as a description of the shot as it already is. Verbs for new events (slams, bursts, spins faster) made the model invent action the shot never had (test 2026-10-06).",
+    "Motion that only runs one way (falling paper, smoke, water) runs backwards in what the model sees: it may straighten it out, which plays as the wrong way round once reversed."
+  ],
+  "tier": "full",
+  "minimumVramGb": 64,
+  "frames": {
+    "slot": "$FRAMES",
+    "min": 9,
+    "step": 8,
+    "offset": 1,
+    "note": "Total length INCLUDING the $CONTEXT frames, which come back LAST. LTX wants 8n+1."
+  },
+  "prompt": {
+    "slot": "$PROMPT",
+    "instructionParameter": "instruction",
+    "lines": [
+      {
+        "when": "always",
+        "text": "The video continues its opening frames without a cut: the same camera move at the same speed, the same action at the same pace, the same people, lighting and style. Nothing new happens."
+      }
+    ]
+  }
+}

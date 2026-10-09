@@ -1,0 +1,177 @@
+{
+  "id": "minimax-h3-references",
+  "name": "MiniMax H3 · references",
+  "model": "minimax-h3-refs",
+  "kind": "video",
+  "version": 1,
+  "fps": 24,
+  "intents": {
+    "video_from_references": {
+      "requires": [],
+      "note": "Reference-to-video: the images and the video are material (character, style, motion), not frames of the result. With neither it is text-to-video. The prompt names them <Picture N> and <Video 1>."
+    }
+  },
+  "priority": 50,
+  "description": "MiniMax H3 from reference images (characters, style) and a reference video, with sound. Runs on your GPU; nothing leaves this machine.",
+  "inputStrategy": "roles",
+  "images": 9,
+  "roles": {
+    "references": {
+      "slot": "$IMAGE_PATHS",
+      "required": false,
+      "collect": true,
+      "ownSize": true,
+      "max": 9,
+      "note": "Every reference image, one loader. Order matters: image N is <Picture N>."
+    },
+    "referenceVideo": {
+      "slot": "$VIDEO_1",
+      "required": false,
+      "max": 1,
+      "detachWhenAbsent": [
+        {
+          "slot": "$IMAGE_PATHS",
+          "input": "video",
+          "note": "No reference video: LoadVideo is unplugged, so it never runs."
+        }
+      ],
+      "note": "<Video 1>, with its own soundtrack when it has one."
+    }
+  },
+  "frames": {
+    "slot": "$FRAMES",
+    "min": 39,
+    "step": 17,
+    "offset": 5,
+    "note": "17k+5 frames at 24 fps, as every H3 template."
+  },
+  "prompt": {
+    "slot": "$PROMPT",
+    "instructionParameter": "instruction",
+    "lines": [],
+    "note": "No preamble: the user's own words are the prompt, as in the official ComfyUI template. The images are read by the node, not described in text."
+  },
+  "slots": {
+    "$IMAGE_PATHS": {
+      "required": false,
+      "note": "reference images, one filename per line"
+    },
+    "$VIDEO_1": {
+      "required": false,
+      "note": "reference video"
+    },
+    "$FRAMES": {
+      "required": true,
+      "note": "output length; the bridge rounds up to 17k+5"
+    },
+    "$WIDTH": {
+      "required": true,
+      "note": "output width, a multiple of 32"
+    },
+    "$HEIGHT": {
+      "required": true,
+      "note": "output height, a multiple of 32"
+    },
+    "$PROMPT": {
+      "required": true
+    },
+    "$SEED": {
+      "required": false,
+      "randomizePerRun": true
+    },
+    "$CHECKPOINT": {
+      "required": true,
+      "note": "chosen from requires.checkpoints, never by the caller"
+    },
+    "$OUTPUT": {
+      "required": true
+    }
+  },
+  "requires": {
+    "backends": [
+      "cuda"
+    ],
+    "nodes": [
+      "UNETLoader",
+      "CLIPLoader",
+      "VAELoader",
+      "PrimitiveInt",
+      "RandomNoise",
+      "KSamplerSelect",
+      "BasicScheduler",
+      "BasicGuider",
+      "SamplerCustomAdvanced",
+      "VAEDecode",
+      "VAEDecodeAudio",
+      "CreateVideo",
+      "SaveVideo",
+      "PrimitiveStringMultiline",
+      "LoadVideo",
+      "ReanimatorH3References",
+      "LoraLoaderModelOnly"
+    ],
+    "checkpoints": {
+      "slot": "$CHECKPOINT",
+      "variants": {
+        "int8_convrot": {
+          "folder": "diffusion_models",
+          "file": "minimax_h3_ref2va_pruned_int8_convrot.safetensors",
+          "gb": 20.97,
+          "url": "https://huggingface.co/Comfy-Org/MiniMax-H3/resolve/main/diffusion_models/minimax_h3_ref2va_pruned_int8_convrot.safetensors",
+          "requiresNativeOps": [
+            "int8_tensorwise",
+            "convrot_w4a4"
+          ]
+        }
+      },
+      "preferred": "int8_convrot",
+      "alternatives": []
+    },
+    "models": [
+      {
+        "folder": "text_encoders",
+        "file": "qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors",
+        "gb": 15.69,
+        "url": "https://huggingface.co/Comfy-Org/MiniMax-H3/resolve/main/text_encoders/qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors",
+        "note": "nvfp4 has no native kernels on Ampere, so on a 3090 it is emulated -- the same situation as Qwen 2511's fp8mixed, which measured 8.6x slower. It runs once per prompt, not per step, but measure it before believing it is fine."
+      },
+      {
+        "folder": "vae",
+        "file": "minimax_h3_video_vae_fp16.safetensors",
+        "gb": 5.21,
+        "url": "https://huggingface.co/Comfy-Org/MiniMax-H3/resolve/main/vae/minimax_h3_video_vae_fp16.safetensors"
+      },
+      {
+        "folder": "vae",
+        "file": "minimax_h3_audio_vae_fp32.safetensors",
+        "gb": 0.61,
+        "url": "https://huggingface.co/Comfy-Org/MiniMax-H3/resolve/main/vae/minimax_h3_audio_vae_fp32.safetensors"
+      },
+      {
+        "folder": "loras",
+        "file": "minimax_h3_ref2v_turbo_4step_v0.1_comfyui_bf16.safetensors",
+        "gb": 1.96,
+        "url": "https://huggingface.co/Comfy-Org/MiniMax-H3/resolve/main/loras/minimax_h3_ref2v_turbo_4step_v0.1_comfyui_bf16.safetensors"
+      }
+    ],
+    "compatibility": {
+      "tier": "full",
+      "minimumVramGb": 24,
+      "note": "Pruned ref2va with the Turbo LoRA (v0.1) at 4 steps. Not measured on the 3090 yet."
+    },
+    "nodePacks": [
+      {
+        "name": "comfyui-reanimator",
+        "provides": [
+          "ReanimatorH3References"
+        ],
+        "note": "Loads a run-time list of references and calls ComfyUI's MiniMaxH3ReferenceToVideo once."
+      }
+    ]
+  },
+  "notes": [
+    "Built by tools/build_h3_keyframes_template.py from minimax-h3-flf; edit that script, not this file."
+  ],
+  "tier": "full",
+  "minimumVramGb": 24
+}

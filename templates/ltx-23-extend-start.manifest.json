@@ -1,0 +1,183 @@
+{
+  "id": "ltx-23-extend-start",
+  "name": "LTX 2.3 · Extend backwards (what came before a clip, three stages)",
+  "model": "ltx-23-extend-start",
+  "kind": "video",
+  "version": 1,
+  "intents": {
+    "video_extend_start": {
+      "requires": [
+        "sourceVideo"
+      ],
+      "note": "Send the START of the shot: the template keeps its first $CONTEXT frames."
+    }
+  },
+  "priority": 10,
+  "description": "The frames before a clip: its opening is reversed, continued with the LTX 2.3 three-stage graph and turned forwards again, so the new part leads into the clip's first frame.",
+  "frames": {
+    "slot": "$FRAMES",
+    "min": 9,
+    "step": 8,
+    "offset": 1,
+    "note": "Total length INCLUDING the $CONTEXT frames, which come back LAST. LTX wants 8n+1."
+  },
+  "prompt": {
+    "slot": "$PROMPT",
+    "instructionParameter": "instruction",
+    "lines": [
+      {
+        "when": "always",
+        "text": "The video continues its opening frames without a cut: the same camera move at the same speed, the same action at the same pace, the same people, lighting and style. Nothing new happens."
+      }
+    ]
+  },
+  "slots": {
+    "$VIDEO_1": {
+      "required": true,
+      "note": "source video"
+    },
+    "$CONTEXT": {
+      "required": false,
+      "note": "frames of the clip's tail kept as context; 8n+1 (49 = 2 s at 24 fps), no more than the clip has"
+    },
+    "$FRAMES": {
+      "required": true,
+      "note": "output length, context included; rounded up to 8n+1"
+    },
+    "$PROMPT": {
+      "required": false
+    },
+    "$SEED": {
+      "required": false,
+      "randomizePerRun": true
+    },
+    "$CHECKPOINT": {
+      "required": true,
+      "note": "chosen from requires.checkpoints, never by the caller"
+    },
+    "$OUTPUT": {
+      "required": true
+    }
+  },
+  "requires": {
+    "backends": [
+      "cuda"
+    ],
+    "nodes": [
+      "BasicScheduler",
+      "CFGGuider",
+      "CLIPTextEncode",
+      "CheckpointLoaderSimple",
+      "ConditioningZeroOut",
+      "CreateVideo",
+      "EmptyLTXVLatentVideo",
+      "GetImageSize",
+      "GetVideoComponents",
+      "ImageFromBatch",
+      "ImageScale",
+      "KSamplerSelect",
+      "LTXAVTextEncoderLoader",
+      "LTXVAudioVAEDecode",
+      "LTXVConcatAVLatent",
+      "LTXVConditioning",
+      "LTXVEmptyLatentAudio",
+      "LTXVImgToVideoInplace",
+      "LTXVLatentUpsampler",
+      "LTXVSeparateAVLatent",
+      "LatentUpscaleModelLoader",
+      "LoadVideo",
+      "LoraLoaderModelOnly",
+      "PrimitiveInt",
+      "RandomNoise",
+      "SamplerCustomAdvanced",
+      "SaveVideo",
+      "VAEDecodeTiled",
+      "VAELoaderKJ",
+      "easy mathInt",
+      "ReverseImageBatch"
+    ],
+    "nodePacks": [
+      {
+        "name": "ComfyUI-KJNodes",
+        "provides": [
+          "VAELoaderKJ",
+          "LazySwitchKJ",
+          "ReverseImageBatch"
+        ]
+      },
+      {
+        "name": "comfyui-easy-use",
+        "provides": [
+          "easy mathInt"
+        ]
+      }
+    ],
+    "checkpoints": {
+      "slot": "$CHECKPOINT",
+      "variants": {
+        "dev_fp8": {
+          "folder": "checkpoints",
+          "file": "ltx-2.3-22b-dev-fp8.safetensors",
+          "gb": 22,
+          "note": "The 3090 has no native FP8, so ComfyUI emulates the ops. That is a speed cost, not a correctness one — see the Qwen 2511 measurement for how large it can get."
+        }
+      },
+      "preferred": "dev_fp8",
+      "alternatives": []
+    },
+    "models": [
+      {
+        "folder": "text_encoders",
+        "file": "gemma_3_12B_it_fp4_mixed.safetensors",
+        "gb": 9.45,
+        "sha256": "aaca463d11e6d8d2a4bdb0d6299214c15ef78a3f73e0ef8113d5a9d0219b3f6d",
+        "url": "https://huggingface.co/Comfy-Org/ltx-2/resolve/main/split_files/text_encoders/gemma_3_12B_it_fp4_mixed.safetensors",
+        "note": "The Gemma 3 encoder LTX 2.3 reads prompts with. NOT on disk on the reference machine as of 2026-09-05 (models/text_encoders/ is empty), so this preset cannot run until it is there. Declared with its hash so the bridge names the file and the folder instead of failing inside LTXAVTextEncoderLoader — and so it can verify a download rather than trust one."
+      },
+      {
+        "folder": "vae",
+        "file": "LTX23_video_vae_bf16.safetensors"
+      },
+      {
+        "folder": "vae",
+        "file": "LTX23_audio_vae_bf16.safetensors"
+      },
+      {
+        "folder": "latent_upscale_models",
+        "file": "ltx-2.3-spatial-upscaler-x1.5-1.0.safetensors"
+      },
+      {
+        "folder": "latent_upscale_models",
+        "file": "ltx-2.3-spatial-upscaler-x2-1.1.safetensors"
+      },
+      {
+        "folder": "loras",
+        "file": "ltx2/ltx-2.3-22b-distilled-lora-dynamic_fro09_avg_rank_105_bf16.safetensors"
+      }
+    ],
+    "compatibility": {
+      "tier": "full",
+      "minimumVramGb": 24,
+      "note": "Measured on nothing yet. This number is inherited from the image preset and must be replaced by a real reading from the first end-to-end run."
+    }
+  },
+  "notes": [
+    "Derived from ltx-23-keyframes: same models, schedulers and steps; LTXSequencer and the guide crops replaced by LTXVImgToVideoInplace at each stage.",
+    "Renders near 1080p and is scaled back to the source's size on the way out.",
+    "The output ends with the $CONTEXT frames re-decoded; the caller drops them and keeps the rest.",
+    "Write the prompt as a description of the shot as it already is. Verbs for new events (slams, bursts, spins faster) made the model invent action the shot never had (test 2026-10-06).",
+    "Motion that only runs one way (falling paper, smoke, water) runs backwards in what the model sees: it may straighten it out, which plays as the wrong way round once reversed."
+  ],
+  "tier": "full",
+  "minimumVramGb": 24,
+  "inputStrategy": "roles",
+  "images": 0,
+  "roles": {
+    "sourceVideo": {
+      "slot": "$VIDEO_1",
+      "required": true,
+      "max": 1,
+      "note": "The clip to lead into. Only its first $CONTEXT frames reach the model."
+    }
+  }
+}

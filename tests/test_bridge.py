@@ -260,88 +260,6 @@ class TestConfigRobustness(BridgeTestCase):
         self.assertTrue(path.with_suffix(".json.bad").exists())
 
 
-class TestMediaConfinement(BridgeTestCase):
-    def setUp(self) -> None:
-        super().setUp()
-        self.root = Path(self._tmp.name) / "projects"
-        (self.root / "sub").mkdir(parents=True)
-        self.video = self.root / "sub" / "clip.mp4"
-        self.video.write_bytes(b"0123456789" * 100)
-        self.secret = Path(self._tmp.name) / "secret.mp4"
-        self.secret.write_bytes(b"private")
-
-    def test_relative_reference_resolves(self):
-        path = media.resolve_within(self.root, "sub/clip.mp4")
-        self.assertEqual(path, self.video.resolve())
-
-    def test_path_traversal_is_rejected(self):
-        for ref in ("../secret.mp4", "sub/../../secret.mp4", "..\\secret.mp4"):
-            with self.subTest(ref=ref), self.assertRaises(media.MediaError):
-                media.resolve_within(self.root, ref)
-
-    def test_absolute_path_is_rejected(self):
-        for ref in (str(self.secret), "/etc/passwd", "C:\\Windows\\win.ini"):
-            with self.subTest(ref=ref), self.assertRaises(media.MediaError):
-                media.resolve_within(self.root, ref)
-
-    @unittest.skipUnless(
-        hasattr(os, "symlink") and sys.platform != "win32",
-        "symlink creation needs privileges on Windows",
-    )
-    def test_symlink_escape_is_rejected(self):
-        link = self.root / "escape.mp4"
-        link.symlink_to(self.secret)
-        with self.assertRaises(media.MediaError):
-            media.resolve_within(self.root, "escape.mp4")
-
-    def test_disallowed_extension_is_rejected(self):
-        script = self.root / "payload.py"
-        script.write_text("print('hi')")
-        with self.assertRaises(media.MediaError):
-            media.resolve_within(self.root, "payload.py")
-
-    def test_listing_exposes_no_absolute_paths(self):
-        for item in media.list_media(self.root):
-            self.assertNotIn(str(self.root), item["ref"])
-            self.assertFalse(Path(item["ref"]).is_absolute())
-
-
-class TestCapabilities(BridgeTestCase):
-    def setUp(self) -> None:
-        super().setUp()
-        self.root = Path(self._tmp.name) / "projects"
-        self.root.mkdir()
-        self.video = self.root / "clip.mp4"
-        self.video.write_bytes(bytes(range(256)) * 4)
-        self.store = media.CapabilityStore()
-
-    def test_capability_is_opaque_and_scoped(self):
-        cap = self.store.grant(self.video.resolve())
-        self.assertNotIn("clip", cap.id)
-        self.assertNotIn(str(self.root), cap.id)
-        self.assertGreaterEqual(len(cap.id), 32)
-
-    def test_unknown_capability_is_rejected(self):
-        with self.assertRaises(media.MediaError) as ctx:
-            self.store.resolve("made-up-identifier")
-        self.assertEqual(ctx.exception.status, 404)
-
-    def test_revoked_capability_stops_working(self):
-        cap = self.store.grant(self.video.resolve())
-        self.assertTrue(self.store.revoke(cap.id))
-        with self.assertRaises(media.MediaError):
-            self.store.resolve(cap.id)
-
-    def test_expired_capability_stops_working(self):
-        cap = self.store.grant(self.video.resolve())
-        self.store._items[cap.id] = media.Capability(
-            id=cap.id, path=cap.path, mime=cap.mime, size=cap.size,
-            expires_at=int(time.time()) - 1,
-        )
-        with self.assertRaises(media.MediaError):
-            self.store.resolve(cap.id)
-
-
 class TestRangeParsing(BridgeTestCase):
     SIZE = 1000
 
@@ -1029,6 +947,13 @@ class TestKeyframesAreBroughtToOneSize(TemplateTestCase):
 
     def sizes_on_disk(self, names):
         return [geometry.measure(runner.read_input(n)) for n in names]
+
+    def test_references_keep_their_own_sizes(self):
+        """H3 references load one by one: a sheet and a wide shot stay as they are."""
+        self.template = templates.get("minimax-h3-references")
+        names, replaced, notes = self.match([(1024, 1024), (1344, 768)])
+        self.assertEqual(replaced, [])
+        self.assertEqual(self.sizes_on_disk(names), [(1024, 1024), (1344, 768)])
 
     def test_every_key_ends_at_the_majority_size(self):
         names, replaced, notes = self.match([(848, 480), (848, 480), (640, 360)])
@@ -2229,7 +2154,7 @@ class TestPresetResolution(BridgeTestCase):
     def test_the_summary_carries_what_a_ui_needs_but_not_a_second_selector(self):
         summary = next(s for s in templates.summaries()
                        if s["id"] == "qwen-image-edit-2511-base")
-        for field in ("intents", "priority", "tier", "roles", "images"):
+        for field in ("intents", "priority", "tier", "roles", "images", "minimumVramGb"):
             self.assertIn(field, summary)
 
 
@@ -2996,6 +2921,79 @@ class TestImageEditEndToEnd(TemplateTestCase, unittest.IsolatedAsyncioTestCase):
             await asyncio.sleep(0.02)
         self.assertEqual(status["state"], "succeeded")
         self.assertEqual(list(self.inputs.glob("rb_*")), [])
+
+    # ── a generated shot going back in, to be re-shot ─────────────────
+
+    MP4 = b"\x00\x00\x00\x18ftypmp42\x00\x00\x00\x00mp42isom" + b"\x00" * 64
+
+    def _recamera_object_info(self):
+        recam = templates.get("ltx-23-crossview-recamera")
+        info = fake_object_info(recam.graph)
+        # The fake takes its FLOAT range from the shipped value (25.0 -> 0..100);
+        # the real widget takes negatives, and so must this stand-in.
+        info["PrimitiveFloat"]["input"]["required"]["value"] = ["FLOAT", {"min": -180.0, "max": 180.0}]
+        runner.object_info = lambda refresh=False: info   # restored by tearDown's patch list
+
+    async def test_an_mp4_is_accepted_as_an_input(self):
+        client = await self.client()
+        response = await client.put("/rb/v1/input/clip", data=self.MP4,
+                                    headers={"Content-Type": "video/mp4"})
+        self.assertEqual(response.status, 200, await response.text())
+        self.assertEqual([p.suffix for p in self.inputs.glob("rb_*")], [".mp4"])
+
+    async def test_something_that_only_says_it_is_an_mp4_is_refused(self):
+        client = await self.client()
+        response = await client.put("/rb/v1/input/clip", data=b"MZ\x90\x00" + b"\x00" * 64,
+                                    headers={"Content-Type": "video/mp4"})
+        self.assertEqual(response.status, 400)
+        self.assertEqual(list(self.inputs.glob("rb_*")), [])
+
+    async def test_a_clip_is_reshot_with_the_camera_in_degrees(self):
+        self._recamera_object_info()
+        client = await self.client()
+        await client.put("/rb/v1/input/clip", data=self.MP4, headers={"Content-Type": "video/mp4"})
+        response = await client.post("/rb/v1/run", json={
+            "intent": "recamera_video",
+            "inputs": {"sourceVideo": "clip"},
+            "camera": {"azimuth": -25, "elevation": 10, "distance": 1, "roll": 0, "panX": 0, "panY": 0},
+            "parameters": {"$FRAMES": 60},
+        })
+        self.assertEqual(response.status, 202, await response.text())
+        run = await response.json()
+        self.assertEqual(run["frames"], {"requested": 60, "rendered": 57, "padded": -3})
+
+        recam = templates.get("ltx-23-crossview-recamera")
+        slots = binder.find_slots(recam.graph, recam.slots)
+        graph = self.queued[0][2]
+        self.assertRegex(graph[slots["$VIDEO_1"].node_id]["inputs"]["video"],
+                         r"^rb_[a-f0-9]+\.mp4$")
+        self.assertEqual(graph[slots["$AZIMUTH"].node_id]["inputs"]["value"], -25)
+        self.assertEqual(graph[slots["$ELEVATION"].node_id]["inputs"]["value"], 10)
+        self.assertEqual(graph[slots["$FRAMES"].node_id]["inputs"]["value"], 57)
+
+    async def test_a_reshoot_from_the_same_camera_is_refused(self):
+        self._recamera_object_info()
+        client = await self.client()
+        await client.put("/rb/v1/input/clip", data=self.MP4, headers={"Content-Type": "video/mp4"})
+        response = await client.post("/rb/v1/run", json={
+            "intent": "recamera_video", "inputs": {"sourceVideo": "clip"},
+            "camera": {"azimuth": 1, "elevation": 0}, "parameters": {"$FRAMES": 49},
+        })
+        self.assertGreaterEqual(response.status, 400)
+        self.assertIn("Set a camera angle", await response.text())
+        self.assertEqual(self.queued, [])
+
+    async def test_a_video_cannot_be_named_through_parameters(self):
+        self._recamera_object_info()
+        client = await self.client()
+        response = await client.post("/rb/v1/run", json={
+            "intent": "recamera_video",
+            "camera": {"azimuth": 20},
+            "parameters": {"$VIDEO_1": "../../secret.mp4", "$FRAMES": 49},
+        })
+        self.assertGreaterEqual(response.status, 400)
+        self.assertIn("image_via_parameters", await response.text())
+        self.assertEqual(self.queued, [])
 
     async def test_a_seed_is_generated_per_run(self):
         """randomizePerRun in the manifest. A fixed seed would make 'generate
@@ -3990,7 +3988,6 @@ class TestAppBuilds(BridgeTestCase):
             "/rb/v1/hello",
             "/rb/v1/pair",
             "/rb/v1/capabilities",
-            "/rb/v1/media/{capability_id}",
             "/rb/v1/templates",
             "/rb/v1/validate",
             "/rb/v1/input/{input_id}",
@@ -4002,6 +3999,20 @@ class TestAppBuilds(BridgeTestCase):
             "/rb/v1/projects/{project_id}/assets/verify",
         ):
             self.assertIn(expected, paths)
+
+    def test_no_route_reads_a_folder_of_the_users_choosing(self):
+        """The old local-media folder: the panel pointed the bridge at any
+        folder and capability URLs read it without the bearer token. Nothing
+        used it, and a registry reviewer reads it as an arbitrary file read."""
+        from reanimator import server
+
+        paths = {r.resource.canonical for r in server.build_app().router.routes()
+                 if r.resource is not None}
+        for gone in ("/rb/v1/media/{capability_id}", "/rb/v1/project/media",
+                     "/rb/v1/project/media/grant", "/rb/v1/project/media/revoke"):
+            self.assertNotIn(gone, paths)
+        panel = (Path(server.__file__).parent / "panel_routes.py").read_text(encoding="utf-8")
+        self.assertNotIn("project-root", panel)
 
     def test_project_asset_route_takes_put_get_and_delete(self):
         from reanimator import server
@@ -4067,7 +4078,7 @@ class TestAppBuilds(BridgeTestCase):
             response.headers["Access-Control-Allow-Origin"], "https://evil.example"
         )
 
-    def test_media_route_answers_head(self):
+    def test_result_route_answers_head(self):
         from reanimator import server
 
         app = server.build_app()
@@ -4075,7 +4086,7 @@ class TestAppBuilds(BridgeTestCase):
             r.method
             for r in app.router.routes()
             if r.resource is not None
-            and r.resource.canonical == "/rb/v1/media/{capability_id}"
+            and r.resource.canonical == "/rb/v1/output/{run_id}/{ref}"
         }
         self.assertIn("GET", methods)
         self.assertIn("HEAD", methods)  # aiohttp adds it for us
@@ -4178,6 +4189,573 @@ class TestMiniMaxH3FirstLastPreset(TemplateTestCase):
         t = templates.Template(id="t", manifest=manifest, graph={}, hash="sha256:x")
         self.assertEqual(t.detach_plan({"$IMAGE_1"}), [])
         self.assertEqual(t.detach_plan(set()), [{"slot": "$PROMPT", "input": "image2"}])
+
+
+class TestCameraPreset(BridgeTestCase):
+    """A camera move runs on its own preset, in the LoRA's own words.
+
+    Measured on a 3090 on 2026-09-16: the base model given the cloud camera
+    prose handed back the same frame 3 times of 3. The multiple-angles LoRA
+    with its tag line turned the camera in every run at strength 1.2 -- and
+    did nothing for a low angle or a dolly, which is why those are refused.
+    """
+
+    IDENTITY = {"azimuth": 0, "elevation": 0, "distance": 1, "roll": 0, "panX": 0, "panY": 0}
+
+    def setUp(self) -> None:
+        super().setUp()
+        templates.reset()
+        self.t = templates.get("qwen-image-edit-2511-camera")
+
+    def tearDown(self) -> None:
+        templates.reset()
+        super().tearDown()
+
+    def cam(self, **moves):
+        return validate.compose_camera_prompt(self.t, {**self.IDENTITY, **moves})
+
+    def test_right_and_left_are_different_quarter_views(self):
+        self.assertEqual(self.cam(azimuth=20)[0],
+                         "<sks> front-right quarter view eye-level shot medium shot")
+        self.assertEqual(self.cam(azimuth=-20)[0],
+                         "<sks> front-left quarter view eye-level shot medium shot")
+
+    def test_a_raised_camera_is_an_elevated_shot(self):
+        self.assertEqual(self.cam(elevation=15)[0],
+                         "<sks> front view elevated shot medium shot")
+        self.assertEqual(self.cam(azimuth=30, elevation=60)[0],
+                         "<sks> front-right quarter view high-angle shot medium shot")
+
+    def test_a_nudge_inside_the_deadband_is_not_a_move(self):
+        text, problems = self.cam(azimuth=5, distance=1.05, roll=1, panX=0.01)
+        self.assertEqual(problems, [])
+        self.assertEqual(text, "<sks> front view eye-level shot medium shot")
+
+    def test_what_did_not_work_is_refused_not_dropped(self):
+        for moves, axis in (({"elevation": -20}, "elevation"),
+                            ({"distance": 0.7}, "distance"),
+                            ({"distance": 1.5}, "distance"),
+                            ({"roll": 10}, "roll"),
+                            ({"panY": 0.2}, "panY")):
+            with self.subTest(moves=moves):
+                text, problems = self.cam(azimuth=30, **moves)
+                self.assertIsNone(text)
+                self.assertEqual([p["axis"] for p in problems], [axis])
+                self.assertTrue(problems[0]["message"].startswith("Local cannot"))
+
+    def test_a_missing_or_partial_camera_reads_as_no_move(self):
+        self.assertEqual(validate.compose_camera_prompt(self.t, None)[0],
+                         "<sks> front view eye-level shot medium shot")
+        self.assertEqual(validate.compose_camera_prompt(self.t, {"azimuth": "x"})[0],
+                         "<sks> front view eye-level shot medium shot")
+
+    def test_the_intent_resolves_to_this_preset_and_not_the_edit_one(self):
+        template, _ = templates.resolve_for_intent("edit_camera")
+        self.assertEqual(template.id, "qwen-image-edit-2511-camera")
+        self.assertNotIn("edit_camera", templates.get("qwen-image-edit-2511-base").intents)
+
+    def test_the_graph_takes_one_picture_and_carries_the_lora(self):
+        graph = self.t.graph
+        self.assertEqual(
+            [n for n in graph.values() if n["class_type"] == "LoadImage"],
+            [graph["223"]],
+        )
+        lora = next(n for n in graph.values()
+                    if n["inputs"].get("lora_name") == "qwen-image-edit-2511-multiple-angles-lora.safetensors")
+        self.assertEqual(lora["inputs"]["strength_model"], 1.2)
+        # Upstream of both quality branches, or Final would run without it.
+        self.assertEqual(graph["170:145"]["inputs"]["model"], ["170:170", 0])
+        declared = {m["file"] for m in self.t.requires["models"]}
+        self.assertIn("qwen-image-edit-2511-multiple-angles-lora.safetensors", declared)
+
+    def test_it_passes_the_same_security_and_pruning_checks(self):
+        self._passes_checks(self.t)
+
+    def test_the_recamera_preset_passes_them_too(self):
+        self._passes_checks(templates.get("ltx-23-crossview-recamera"))
+
+    def test_degrees_go_into_slots_for_a_preset_that_takes_degrees(self):
+        recam = templates.get("ltx-23-crossview-recamera")
+        text, values, problems = validate.compose_camera(recam, {**self.IDENTITY, "azimuth": 15, "elevation": -12})
+        self.assertEqual((text, problems), (None, []))
+        self.assertEqual(values, {"$AZIMUTH": 15, "$ELEVATION": -12})
+
+    def test_degrees_outside_the_trained_range_are_refused(self):
+        recam = templates.get("ltx-23-crossview-recamera")
+        for moves, axis in (({"azimuth": 120}, "azimuth"), ({"elevation": -50}, "elevation"),
+                            ({"azimuth": 20, "distance": 0.8}, "distance")):
+            with self.subTest(moves=moves):
+                _, values, problems = validate.compose_camera(recam, {**self.IDENTITY, **moves})
+                self.assertEqual(values, {})
+                self.assertEqual([p["axis"] for p in problems], [axis])
+
+    def test_no_move_is_refused_where_a_move_is_the_whole_request(self):
+        recam = templates.get("ltx-23-crossview-recamera")
+        _, _, problems = validate.compose_camera(recam, {**self.IDENTITY, "azimuth": 1})
+        self.assertIn("Set a camera angle", problems[0]["message"])
+        # The still-frame preset does not demand one: 'front view' is a valid pose.
+        self.assertEqual(validate.compose_camera(self.t, self.IDENTITY)[2], [])
+
+    def test_a_reshoot_rounds_its_length_down_and_caps_it(self):
+        recam = templates.get("ltx-23-crossview-recamera")
+        self.assertEqual(recam.legal_frame_count(60), 57)
+        self.assertEqual(recam.legal_frame_count(57), 57)
+        self.assertEqual(recam.legal_frame_count(400), 121)
+        self.assertEqual(recam.legal_frame_count(3), 9)
+        # And every other video preset still rounds up.
+        self.assertEqual(templates.get("ltx-23-keyframes").legal_frame_count(60), 65)
+
+    def test_the_video_slot_binds_to_the_loader_widget(self):
+        recam = templates.get("ltx-23-crossview-recamera")
+        slot = binder.find_slots(recam.graph, recam.slots)["$VIDEO_1"]
+        self.assertEqual((slot.family, slot.widget, slot.class_type), ("video", "video", "VHS_LoadVideo"))
+
+    def _passes_checks(self, t):
+        used = {n["class_type"] for n in t.graph.values()}
+        self.assertEqual(used - set(t.requires["nodes"]), set())
+        self.assertTrue(validate.check_template_security(t, fake_object_info(t.graph)).ok)
+        slots = binder.find_slots(t.graph, t.slots)
+        self.assertTrue(validate.check_after_pruning(
+            t.graph, binder.output_node_ids(slots), fake_object_info(t.graph)).ok)
+
+
+class TestH3KeyframesPreset(BridgeTestCase):
+    """MiniMax H3 with keys at any frame: the template and its node."""
+
+    def test_the_template_binds_like_ltx(self):
+        t = templates.get("minimax-h3-keyframes")
+        slots = binder.find_slots(t.graph, t.slots)
+        g = binder.fill(t.graph, {
+            "$IMAGE_PATHS": ["a.png", "b.png", "c.png"],
+            "$SEQUENCER": [{"frame": 0, "strength": 1}, {"frame": 12, "strength": 1},
+                           {"frame": 30, "strength": 1}],
+            "$FRAMES": t.legal_frame_count(31), "$PROMPT": "x",
+        }, slots)
+        seq = next(n for n in g.values() if n["class_type"] == "ReanimatorH3Sequencer")["inputs"]
+        self.assertEqual((seq["num_images"], seq["insert_frame_2"], seq["insert_frame_3"]), (3, 12, 30))
+        self.assertEqual(t.legal_frame_count(31), 39)
+        self.assertEqual(t.manifest["model"], "minimax-h3-keys")
+
+    def test_the_canvas_keeps_the_keys_shape(self):
+        """1280x720 went to 1280x736 through ImageScaleToTotalPixels, and the
+        shot zoomed 2.2 % when it left key 1."""
+        from reanimator.nodes import grid_size
+
+        for (w, h), expected in {
+            (1280, 720): (1312, 736), (1920, 1080): (1312, 736),
+            (1440, 1080): (1152, 864), (1000, 1000): (960, 960), (1080, 1920): (736, 1312),
+        }.items():
+            got = grid_size(w, h, 0.9)
+            self.assertEqual(got, expected, (w, h))
+            self.assertEqual((got[0] % 32, got[1] % 32), (0, 0))
+            self.assertLess(abs((got[0] / got[1]) / (w / h) - 1), 0.005)
+
+    def test_every_key_goes_through_one_canvas(self):
+        t = templates.get("minimax-h3-keyframes")
+        fit = next(k for k, n in t.graph.items() if n["class_type"] == "ReanimatorFitToGrid")
+        first = next(n for n in t.graph.values() if n["class_type"] == "ImageFromBatch")
+        seq = next(n for n in t.graph.values() if n["class_type"] == "ReanimatorH3Sequencer")
+        i2v = next(n for n in t.graph.values() if n["class_type"] == "MiniMaxH3ImageToVideo")
+        self.assertEqual(first["inputs"]["image"], [fit, 0])
+        self.assertEqual(seq["inputs"]["images"], [fit, 0])
+        self.assertEqual((i2v["inputs"]["width"], i2v["inputs"]["height"]), ([fit, 1], [fit, 2]))
+
+    def test_it_passes_the_security_checks(self):
+        t = templates.get("minimax-h3-keyframes")
+        used = {n["class_type"] for n in t.graph.values()}
+        self.assertEqual(used - set(t.requires["nodes"]), set())
+        self.assertTrue(validate.check_template_security(t, fake_object_info(t.graph)).ok)
+
+    def test_the_node_anchors_every_key_but_the_first_at_its_frame(self):
+        import sys
+        import types
+        from reanimator import nodes
+
+        calls = []
+
+        class FakeAddGuide:
+            @classmethod
+            def execute(cls, positive, latent, frame_idx, vae=None, image=None):
+                calls.append((frame_idx, image))
+                kfs = list(positive[0][1].get("minimax_keyframes", []))
+                kfs.append({"resolved_frame_index": frame_idx})
+                return ([[positive[0][0], {"minimax_keyframes": kfs}]],)
+
+        fake = types.ModuleType("comfy_extras.nodes_minimax_h3")
+        fake.MiniMaxH3AddGuide = FakeAddGuide
+        saved = sys.modules.get("comfy_extras.nodes_minimax_h3")
+        sys.modules["comfy_extras.nodes_minimax_h3"] = fake
+        sys.modules.setdefault("comfy_extras", types.ModuleType("comfy_extras"))
+        try:
+            class Batch(list):
+                shape = (3,)
+            images = Batch(["k1", "k2", "k3"])
+            # Key 1 already went in as first_frame (MiniMaxH3ImageToVideo).
+            positive = [["cond", {"minimax_keyframes": [{"resolved_frame_index": 0}]}]]
+            (out,) = nodes.ReanimatorH3Sequencer().apply(
+                positive, {"samples": None}, "vae", images, 3,
+                insert_frame_1=0, insert_frame_2=12, insert_frame_3=30,
+            )
+        finally:
+            if saved is None:
+                sys.modules.pop("comfy_extras.nodes_minimax_h3", None)
+            else:
+                sys.modules["comfy_extras.nodes_minimax_h3"] = saved
+        self.assertEqual([(f, img) for f, img in calls], [(12, ["k2"]), (30, ["k3"])])
+        self.assertEqual([k["resolved_frame_index"] for k in out[0][1]["minimax_keyframes"]], [0, 12, 30])
+
+
+class TestNodesReadOnlyFromInput(BridgeTestCase):
+    """Our nodes take image names from a text widget: only bare names in input/."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        import types
+        self.inputs = Path(self._tmp.name) / "input"
+        self.inputs.mkdir()
+        (self.inputs / "ok.png").write_bytes(b"x")
+        (Path(self._tmp.name) / "secret.png").write_bytes(b"x")
+        fake = types.ModuleType("folder_paths")
+        fake.get_input_directory = lambda: str(self.inputs)
+        self._saved = sys.modules.get("folder_paths")
+        sys.modules["folder_paths"] = fake
+
+    def tearDown(self) -> None:
+        if self._saved is None:
+            sys.modules.pop("folder_paths", None)
+        else:
+            sys.modules["folder_paths"] = self._saved
+        super().tearDown()
+
+    def test_a_bare_name_in_input_is_read(self):
+        from reanimator.nodes import input_image_path
+        self.assertEqual(Path(input_image_path("ok.png")), (self.inputs / "ok.png").resolve())
+
+    def test_anything_else_is_refused(self):
+        from reanimator.nodes import input_image_path
+        for name in ("../secret.png", "..\secret.png", str(Path(self._tmp.name) / "secret.png"),
+                     "sub/ok.png", "ok.png [output]", "missing.png", "", ".."):
+            with self.subTest(name=name), self.assertRaises(ValueError):
+                input_image_path(name)
+
+
+class TestH3ReferencesPreset(BridgeTestCase):
+    """MiniMax H3 from references on the cloud GPU: images, one video, or none."""
+
+    def test_it_binds_images_video_size_and_prompt(self):
+        t = templates.get("minimax-h3-references-hq")
+        slots = binder.find_slots(t.graph, t.slots)
+        g = binder.fill(t.graph, {
+            "$IMAGE_PATHS": ["a.png", "b.png"], "$VIDEO_1": "v.mp4",
+            "$FRAMES": t.legal_frame_count(120), "$PROMPT": "the fox from <Picture 1>",
+            "$WIDTH": 768, "$HEIGHT": 1344,
+        }, slots)
+        refs = next(n for n in g.values() if n["class_type"] == "ReanimatorH3References")
+        self.assertEqual(refs["inputs"]["image_paths"].splitlines(), ["a.png", "b.png"])
+        video = next(n for n in g.values() if n["class_type"] == "LoadVideo")
+        self.assertEqual(video["inputs"]["file"], "v.mp4")
+        self.assertEqual(t.role_max("references"), 9)
+
+    def test_no_video_unplugs_the_loader(self):
+        t = templates.get("minimax-h3-references-hq")
+        self.assertEqual(t.detach_plan({"$IMAGE_PATHS"}), [{"slot": "$IMAGE_PATHS", "input": "video"}])
+        self.assertEqual(t.detach_plan({"$IMAGE_PATHS", "$VIDEO_1"}), [])
+
+    def test_it_samples_ref2va_unpruned_first(self):
+        t = templates.get("minimax-h3-references-hq")
+        self.assertIn("ref2va", t.select_checkpoint(file_exists=lambda *_: True)["file"])
+        self.assertNotIn("pruned", t.select_checkpoint(file_exists=lambda *_: True)["file"])
+        self.assertEqual(
+            t.select_checkpoint(file_exists=lambda _d, f: "pruned" in f)["variant"], "int8_convrot")
+        sched = next(n for n in t.graph.values() if n["class_type"] == "BasicScheduler")
+        self.assertEqual(sched["inputs"]["steps"], 20)
+        self.assertNotEqual(t.manifest["model"], templates.get("minimax-h3-flf").manifest["model"])
+
+    def test_it_passes_the_security_checks(self):
+        t = templates.get("minimax-h3-references-hq")
+        used = {n["class_type"] for n in t.graph.values()}
+        self.assertEqual(used - set(t.requires["nodes"]), set())
+        self.assertTrue(validate.check_template_security(t, fake_object_info(t.graph)).ok)
+
+    def test_reference_video_is_played_back_at_24_fps(self):
+        from reanimator.nodes import resample_indices
+
+        self.assertEqual(resample_indices(48, 24), list(range(48)))
+        thirty = resample_indices(60, 30)            # 2 s at 30 fps
+        self.assertEqual(len(thirty), 48)
+        self.assertEqual((thirty[0], thirty[-1]), (0, 58))
+        self.assertEqual(resample_indices(0, 30), [])
+
+    def test_the_node_hands_every_reference_to_comfy(self):
+        import sys
+        import types
+        from reanimator import nodes
+
+        seen = {}
+
+        class FakeR2V:
+            @classmethod
+            def execute(cls, **kw):
+                seen.update(kw)
+                return ("cond", "latent")
+
+        fake = types.ModuleType("comfy_extras.nodes_minimax_h3")
+        fake.MiniMaxH3ReferenceToVideo = FakeR2V
+        saved = sys.modules.get("comfy_extras.nodes_minimax_h3")
+        sys.modules["comfy_extras.nodes_minimax_h3"] = fake
+        sys.modules.setdefault("comfy_extras", types.ModuleType("comfy_extras"))
+        node = nodes.ReanimatorH3References()
+        node._load_image = lambda name: f"img:{name}"
+
+        class Frames(list):
+            @property
+            def shape(self):
+                return (len(self),)
+
+            def __getitem__(self, keep):
+                return [list.__getitem__(self, i) for i in keep] if isinstance(keep, list) \
+                    else list.__getitem__(self, keep)
+
+        class Video:
+            def get_components(self):
+                return types.SimpleNamespace(images=Frames(range(60)), frame_rate=30, audio="aud")
+
+        try:
+            out = node.apply("clip", "vae", "avae", "p", 1344, 768, 124, "a.png\n\nb.png\n",
+                             video=Video())
+        finally:
+            if saved is None:
+                sys.modules.pop("comfy_extras.nodes_minimax_h3", None)
+            else:
+                sys.modules["comfy_extras.nodes_minimax_h3"] = saved
+        self.assertEqual(out, ("cond", "latent"))
+        self.assertEqual(seen["ref_images"], {"ref_image_1": "img:a.png", "ref_image_2": "img:b.png"})
+        self.assertEqual(len(seen["ref_videos"]["ref_video_1"]), 48)
+        self.assertEqual(seen["ref_video_audios"], {"ref_video_audio_1": "aud"})
+
+
+class TestH3KeyframesHqPreset(BridgeTestCase):
+    """The cloud variant: no Turbo LoRA, 20 steps, the unpruned checkpoint."""
+
+    def test_it_samples_the_base_model_at_20_steps(self):
+        t = templates.get("minimax-h3-keyframes-hq")
+        types_used = {n["class_type"] for n in t.graph.values()}
+        self.assertNotIn("LoraLoaderModelOnly", types_used)
+        unet = next(k for k, n in t.graph.items() if n["class_type"] == "UNETLoader")
+        sched = next(n for n in t.graph.values() if n["class_type"] == "BasicScheduler")
+        guider = next(n for n in t.graph.values() if n["class_type"] == "BasicGuider")
+        self.assertEqual(sched["inputs"]["steps"], 20)
+        self.assertEqual((sched["inputs"]["model"], guider["inputs"]["model"]), ([unet, 0], [unet, 0]))
+        self.assertFalse(any(m["folder"] == "loras" for m in t.requires["models"]))
+
+    def test_the_local_bridge_never_picks_it_for_the_turbo_model(self):
+        hq = templates.get("minimax-h3-keyframes-hq")
+        turbo = templates.get("minimax-h3-keyframes")
+        self.assertNotEqual(hq.manifest["model"], turbo.manifest["model"])
+        self.assertLess(hq.manifest["priority"], turbo.manifest["priority"])
+
+    def test_it_prefers_the_unpruned_checkpoint_and_falls_back_to_the_pruned(self):
+        t = templates.get("minimax-h3-keyframes-hq")
+        self.assertEqual(t.select_checkpoint(file_exists=lambda *_: True)["variant"], "int8_convrot_full")
+        pruned_only = t.select_checkpoint(file_exists=lambda _folder, f: "pruned" in f)
+        self.assertEqual(pruned_only["variant"], "int8_convrot")
+        self.assertEqual(pruned_only["fallbackFrom"]["code"], "missing_model")
+
+    def test_it_binds_and_passes_the_security_checks(self):
+        t = templates.get("minimax-h3-keyframes-hq")
+        slots = binder.find_slots(t.graph, t.slots)
+        g = binder.fill(t.graph, {
+            "$IMAGE_PATHS": ["a.png"], "$SEQUENCER": [{"frame": 0, "strength": 1}],
+            "$FRAMES": t.legal_frame_count(120), "$PROMPT": "x",
+        }, slots)
+        seq = next(n for n in g.values() if n["class_type"] == "ReanimatorH3Sequencer")["inputs"]
+        self.assertEqual(seq["num_images"], 1)
+        self.assertEqual(t.legal_frame_count(120), 124)
+        used = {n["class_type"] for n in t.graph.values()}
+        self.assertEqual(used - set(t.requires["nodes"]), set())
+        self.assertTrue(validate.check_template_security(t, fake_object_info(t.graph)).ok)
+
+
+class TestExtendPresets(BridgeTestCase):
+    """Extend on a 24 GB card: the LTX 2.5 presets need 48+ GB, so both "+"
+    buttons have to land on the LTX 2.3 three-stage graphs."""
+
+    RIG = {"device": "NVIDIA GeForce RTX 3090", "computeCapability": "8.6",
+           "vramTotalMb": 24576}
+
+    def setUp(self) -> None:
+        super().setUp()
+        templates.reset()
+
+    def test_a_3090_extends_with_ltx_23_both_ways(self):
+        for intent, expected in (("video_extend", "ltx-23-extend"),
+                                 ("video_extend_start", "ltx-23-extend-start")):
+            with self.subTest(intent=intent):
+                template, _ = templates.resolve_for_intent(intent, self.RIG, lambda f, n: True)
+                self.assertEqual(template.id, expected)
+
+    def test_backwards_reverses_the_clip_in_and_the_result_out(self):
+        forward = templates.get("ltx-23-extend").graph
+        g = templates.get("ltx-23-extend-start").graph
+        rev = {k for k, n in g.items() if n["class_type"] == "ReverseImageBatch"}
+        self.assertEqual(len(rev), 2)
+        # Only the two reversals differ from the forward graph.
+        self.assertEqual(set(g) - set(forward), rev)
+        tail = next(n for n in g.values() if n["class_type"] == "ImageFromBatch")
+        out = next(n for n in g.values() if n["class_type"] == "ImageScale")
+        self.assertIn(tail["inputs"]["image"][0], rev)
+        self.assertIn(out["inputs"]["image"][0], rev)
+
+    def test_it_binds_and_passes_the_security_checks(self):
+        t = templates.get("ltx-23-extend-start")
+        slots = binder.find_slots(t.graph, t.slots)
+        binder.fill(t.graph, {"$VIDEO_1": "rb_0123456789abcdef.mp4", "$CONTEXT": 49,
+                              "$FRAMES": 97, "$PROMPT": "x"}, slots)
+        used = {n["class_type"] for n in t.graph.values()}
+        self.assertEqual(used - set(t.requires["nodes"]), set())
+        self.assertTrue(validate.check_template_security(t, fake_object_info(t.graph)).ok)
+
+
+class TestH3ReferencesLocalPreset(BridgeTestCase):
+    """References on a 24 GB card: pruned ref2va plus the 4-step Turbo LoRA."""
+
+    RIG = {"device": "NVIDIA GeForce RTX 3090", "computeCapability": "8.6",
+           "vramTotalMb": 24576}
+
+    def setUp(self) -> None:
+        super().setUp()
+        templates.reset()
+
+    def test_a_3090_gets_the_local_one_and_a_big_card_too(self):
+        template, _ = templates.resolve_for_intent("video_from_references", self.RIG, lambda f, n: True)
+        self.assertEqual(template.id, "minimax-h3-references")
+        big = {**self.RIG, "vramTotalMb": 97887}
+        template, _ = templates.resolve_for_intent("video_from_references", big, lambda f, n: True)
+        self.assertEqual(template.id, "minimax-h3-references")
+
+    def test_it_samples_four_steps_through_the_lora(self):
+        t = templates.get("minimax-h3-references")
+        lora = next(k for k, n in t.graph.items() if n["class_type"] == "LoraLoaderModelOnly")
+        sched = next(n for n in t.graph.values() if n["class_type"] == "BasicScheduler")
+        guider = next(n for n in t.graph.values() if n["class_type"] == "BasicGuider")
+        self.assertEqual(sched["inputs"]["steps"], 4)
+        self.assertEqual((sched["inputs"]["model"], guider["inputs"]["model"]), ([lora, 0], [lora, 0]))
+        self.assertIn("pruned", t.select_checkpoint(file_exists=lambda *_: True)["file"])
+        self.assertEqual(t.minimum_vram_gb, 24)
+
+    def test_it_binds_and_passes_the_security_checks(self):
+        t = templates.get("minimax-h3-references")
+        slots = binder.find_slots(t.graph, t.slots)
+        binder.fill(t.graph, {"$IMAGE_PATHS": ["a.png"], "$FRAMES": 124, "$WIDTH": 1344,
+                              "$HEIGHT": 768, "$PROMPT": "x"}, slots)
+        used = {n["class_type"] for n in t.graph.values()}
+        self.assertEqual(used - set(t.requires["nodes"]), set())
+        self.assertTrue(validate.check_template_security(t, fake_object_info(t.graph)).ok)
+
+
+class TestNativeModelPaths(unittest.TestCase):
+    """A template exported on Windows must name its LoRA the Linux way on Linux."""
+
+    LORA = "ltx2\\ltx-2.3-22b-distilled-lora-dynamic_fro09_avg_rank_105_bf16.safetensors"
+
+    def graph(self):
+        return {
+            "1": {"class_type": "LoraLoaderModelOnly", "inputs": {"lora_name": self.LORA,
+                                                                  "model": ["2", 0]}},
+            "2": {"class_type": "CLIPTextEncode", "inputs": {"text": "a/b\\c"}},
+        }
+
+    def test_windows_names_become_linux_names(self):
+        g = templates.native_model_paths(self.graph(), sep="/")
+        self.assertEqual(g["1"]["inputs"]["lora_name"], self.LORA.replace("\\", "/"))
+
+    def test_linux_names_become_windows_names(self):
+        g = self.graph()
+        g["1"]["inputs"]["lora_name"] = self.LORA.replace("\\", "/")
+        templates.native_model_paths(g, sep="\\")
+        self.assertEqual(g["1"]["inputs"]["lora_name"], self.LORA)
+
+    def test_only_model_filenames_are_touched(self):
+        g = templates.native_model_paths(self.graph(), sep="/")
+        self.assertEqual(g["2"]["inputs"]["text"], "a/b\\c")
+        self.assertEqual(g["1"]["inputs"]["model"], ["2", 0])
+
+    def test_shipped_templates_load_with_this_platforms_separator(self):
+        lora = templates.get("ltx-23-keyframes").graph
+        names = [n["inputs"].get("lora_name") for n in lora.values()
+                 if n.get("class_type") == "LoraLoaderModelOnly"]
+        self.assertTrue(names)
+        other = "/" if os.sep == "\\" else "\\"
+        self.assertFalse(any(other in name for name in names), names)
+
+
+class TestServiceMode(BridgeTestCase, unittest.IsolatedAsyncioTestCase):
+    """The bridge inside a cloud worker: a handler in the same container, no browser."""
+
+    TOKEN = "s" * 40
+
+    def setUp(self) -> None:
+        super().setUp()
+        self._env = os.environ.get(config.SERVICE_TOKEN_ENV)
+        os.environ[config.SERVICE_TOKEN_ENV] = self.TOKEN
+
+    def tearDown(self) -> None:
+        if self._env is None:
+            os.environ.pop(config.SERVICE_TOKEN_ENV, None)
+        else:
+            os.environ[config.SERVICE_TOKEN_ENV] = self._env
+        super().tearDown()
+
+    async def client(self, headers=None):
+        from aiohttp.test_utils import TestClient, TestServer
+        from reanimator import server
+
+        client = TestClient(TestServer(server.build_app()))
+        await client.start_server()
+        self.addAsyncCleanup(client.close)
+        # aiohttp's test client adds no Origin of its own, which is what the
+        # worker's handler looks like.
+        client.session.headers.update(headers or {})
+        return client
+
+    async def test_the_service_token_opens_the_api_without_an_origin(self):
+        client = await self.client({"Authorization": f"Bearer {self.TOKEN}"})
+        response = await client.get("/rb/v1/templates")
+        self.assertEqual(response.status, 200, await response.text())
+
+    async def test_a_wrong_token_is_refused(self):
+        client = await self.client({"Authorization": "Bearer " + "x" * 40})
+        response = await client.get("/rb/v1/templates")
+        self.assertEqual(response.status, 401)
+
+    async def test_no_token_is_refused(self):
+        client = await self.client()
+        self.assertEqual((await client.get("/rb/v1/templates")).status, 401)
+
+    async def test_pairing_is_switched_off(self):
+        client = await self.client({"Authorization": f"Bearer {self.TOKEN}"})
+        self.assertEqual((await client.get("/rb/v1/pair/nonce")).status, 404)
+        self.assertEqual((await client.post("/rb/v1/pair", json={})).status, 404)
+
+    async def test_the_service_token_is_not_a_browser_token(self):
+        # A page that learned the secret still gets the browser rules: an
+        # allowed Origin plus a paired token.
+        client = await self.client({
+            "Authorization": f"Bearer {self.TOKEN}",
+            "Origin": config.ALLOWED_ORIGIN,
+        })
+        self.assertEqual((await client.get("/rb/v1/templates")).status, 401)
+
+    async def test_a_short_token_leaves_service_mode_off(self):
+        os.environ[config.SERVICE_TOKEN_ENV] = "short"
+        self.assertIsNone(config.service_token())
+        client = await self.client({"Authorization": "Bearer short"})
+        self.assertEqual((await client.get("/rb/v1/templates")).status, 403)
+
+    async def test_without_the_variable_nothing_changes(self):
+        os.environ.pop(config.SERVICE_TOKEN_ENV, None)
+        client = await self.client({"Authorization": f"Bearer {self.TOKEN}"})
+        self.assertEqual((await client.get("/rb/v1/templates")).status, 403)
 
 
 if __name__ == "__main__":

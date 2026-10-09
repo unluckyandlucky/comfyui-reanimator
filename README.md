@@ -36,8 +36,10 @@ pip install cryptography Pillow
 2. Click **Connect this device**. Your browser will ask for permission to reach this computer —
    allow it.
 3. ComfyUI shows an approval dialog with your account e-mail. Check it is yours, click **Allow**.
-4. In the ComfyUI *Reanimator Bridge* panel, choose a **project folder**. That folder is the only
-   place the editor can read media from.
+
+The bridge never reads a folder of your choosing: it reads only what the editor uploads to it
+(into ComfyUI's `input/`), the results ComfyUI writes, and the project files it keeps itself in
+ComfyUI's user folder.
 
 Chrome and Edge are supported. Firefox is untested but expected to work. Safari cannot connect to
 local servers from an HTTPS page.

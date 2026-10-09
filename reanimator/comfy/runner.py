@@ -36,10 +36,14 @@ log = logging.getLogger("reanimator.bridge")
 
 INPUT_PREFIX = "rb_"
 INPUT_SUFFIXES = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
-                  ".webp": "image/webp"}
+                  ".webp": "image/webp",
+                  # A generated shot going back in to be re-shot from another
+                  # camera. Same rules as a picture: bridge-chosen name, fixed
+                  # extension, size cap.
+                  ".mp4": "video/mp4"}
 # What write_input names a file, and so the only thing read_input and
 # delete_input will touch. Kept identical to validate.INPUT_FILENAME_RE.
-INPUT_NAME_RE = re.compile(r"^rb_[a-f0-9]{8,64}\.(png|jpg|jpeg|webp)$")
+INPUT_NAME_RE = re.compile(r"^rb_[a-f0-9]{8,64}\.(png|jpg|jpeg|webp|mp4)$")
 MAX_INPUT_BYTES = 64 * 1024 * 1024
 MAX_INPUTS_PER_RUN = 16
 
@@ -275,12 +279,12 @@ def write_input(data: bytes, suffix: str) -> str:
     """
     suffix = suffix.lower()
     if suffix not in INPUT_SUFFIXES:
-        raise RunError(f"Unsupported image type: {suffix}", "bad_input_type")
+        raise RunError(f"Unsupported input type: {suffix}", "bad_input_type")
     if not data:
         raise RunError("Empty upload.", "bad_input")
     if len(data) > MAX_INPUT_BYTES:
         raise RunError(
-            f"Image is larger than {MAX_INPUT_BYTES // (1024 * 1024)} MB.",
+            f"Input is larger than {MAX_INPUT_BYTES // (1024 * 1024)} MB.",
             "input_too_large",
         )
 
@@ -518,6 +522,14 @@ def _in_queue(prompt_id: str) -> bool:
     return False
 
 
+def _is_running(prompt_id: str) -> bool:
+    try:
+        running, _ = _prompt_server().prompt_queue.get_current_queue()
+    except Exception:                             # pragma: no cover
+        return True                               # can't tell: stopping beats running on
+    return any(len(item) > 1 and str(item[1]) == prompt_id for item in running)
+
+
 def entry_error(entry: Mapping[str, Any]) -> str | None:
     """The failure message ComfyUI recorded, or None if the run succeeded.
 
@@ -555,6 +567,12 @@ async def interrupt(prompt_id: str | None = None) -> None:
             )
         except Exception:                         # pragma: no cover
             pass
+        # interrupt_processing() para lo que ESTÉ corriendo, sea de quien sea.
+        # Si el nuestro seguía esperando en la cola ya se ha quitado arriba, y
+        # parar la GPU mataría el trabajo de otro (otra pestaña, la ventana de
+        # ComfyUI) en su lugar.
+        if not _is_running(prompt_id):
+            return
     try:
         import nodes
         nodes.interrupt_processing()

@@ -1,0 +1,232 @@
+{
+  "id": "qwen-image-edit-2511-camera",
+  "name": "Qwen Image Edit 2511 · Camera",
+  "kind": "image",
+  "version": 1,
+  "intents": {
+    "edit_camera": {
+      "requires": [
+        "cleanFrame"
+      ],
+      "note": "Re-shoot a frame from a moved camera. Its own preset and not a branch of qwen-image-edit-2511-base, for two measured reasons (2026-09-16, RTX 3090, docs/qwen-2511-camera-ab.md). One: the base model does not obey a camera move from words -- the cloud camera prompt gave back the same frame 3 times out of 3, and short 'Rotate the camera N degrees' prompts turned it in 2 runs of 12. Two: the multiple-angles LoRA that does obey has to be in the model chain, and a LoRA node in the base graph would make every stroke edit need a file it does not use."
+    }
+  },
+  "priority": 100,
+  "description": "Re-shoots the frame from the camera you set on the key. Runs on your GPU; nothing leaves this machine.",
+  "inputStrategy": "roles",
+  "images": 1,
+  "roles": {
+    "cleanFrame": {
+      "slot": "$IMAGE_1",
+      "required": true,
+      "note": "The only picture. No annotated frame and no context board: the LoRA was trained on one image per pose, and a second picture is an untested request, not a free improvement."
+    }
+  },
+  "prompt": {
+    "slot": "$PROMPT"
+  },
+  "camera": {
+    "prompt": "<sks> {azimuth} {elevation} {distance}",
+    "note": "The LoRA's own vocabulary, and nothing else: 8 azimuths x 4 elevations x 3 distances. It does not take degrees, so a move SNAPS to the nearest pose -- anything past the deadband comes out as a ~45 degree quarter view, never as 15 degrees. Lowering the LoRA strength does not make the move smaller; at 0.5 the right turn was as wide as at 1.2 and the left turn stopped happening. 1.2 is the value that turned both ways in every run. Positive azimuth is camera right, positive elevation is camera up -- the editor's convention, checked against parallax in the outputs.",
+    "axes": {
+      "azimuth": {
+        "deadband": 8,
+        "none": "front view",
+        "positive": [
+          {"upTo": 67.5, "text": "front-right quarter view"},
+          {"upTo": 112.5, "text": "right side view"},
+          {"upTo": 157.5, "text": "back-right quarter view"},
+          {"upTo": 180, "text": "back view"}
+        ],
+        "negative": [
+          {"upTo": 67.5, "text": "front-left quarter view"},
+          {"upTo": 112.5, "text": "left side view"},
+          {"upTo": 157.5, "text": "back-left quarter view"},
+          {"upTo": 180, "text": "back view"}
+        ]
+      },
+      "elevation": {
+        "deadband": 8,
+        "none": "eye-level shot",
+        "positive": [
+          {"upTo": 45, "text": "elevated shot"},
+          {"upTo": 90, "text": "high-angle shot"}
+        ],
+        "unsupported": {
+          "negative": "Local cannot lower the camera yet: 'low-angle shot' left the frame unchanged in 4 runs of 4 on the reference GPU. Raise it, or reset the height and use Cloud for a low angle."
+        }
+      },
+      "distance": {
+        "deadband": 0.08,
+        "none": "medium shot",
+        "unsupported": {
+          "negative": "Local cannot dolly in yet: 'close-up' left the frame unchanged in 4 runs of 4 on the reference GPU. Reset the dolly, or use Cloud for this key.",
+          "positive": "Local cannot dolly out yet: nothing has been measured for it. Reset the dolly, or use Cloud for this key."
+        },
+        "center": 1
+      },
+      "roll": {
+        "deadband": 3,
+        "unsupported": {
+          "positive": "Local cannot roll the camera. Reset the roll, or use Cloud for this key.",
+          "negative": "Local cannot roll the camera. Reset the roll, or use Cloud for this key."
+        }
+      },
+      "panX": {
+        "deadband": 0.03,
+        "unsupported": {
+          "positive": "Local cannot pan the camera. Reset the pan, or use Cloud for this key.",
+          "negative": "Local cannot pan the camera. Reset the pan, or use Cloud for this key."
+        }
+      },
+      "panY": {
+        "deadband": 0.03,
+        "unsupported": {
+          "positive": "Local cannot pan the camera. Reset the pan, or use Cloud for this key.",
+          "negative": "Local cannot pan the camera. Reset the pan, or use Cloud for this key."
+        }
+      }
+    }
+  },
+  "quality": {
+    "slot": "$PREVIEW",
+    "preview": {
+      "value": true,
+      "steps": 4,
+      "cfg": 1
+    },
+    "final": {
+      "value": false,
+      "steps": 16,
+      "cfg": 4,
+      "note": "Unmeasured with the camera LoRA. Every camera number in this manifest comes from preview."
+    }
+  },
+  "slots": {
+    "$IMAGE_1": {
+      "required": true,
+      "note": "clean frame"
+    },
+    "$CHECKPOINT": {
+      "required": true,
+      "note": "chosen from requires.checkpoints, never by the caller"
+    },
+    "$PROMPT": {
+      "required": true
+    },
+    "$NEGATIVE": {
+      "required": true
+    },
+    "$SEED": {
+      "required": false,
+      "randomizePerRun": true
+    },
+    "$PREVIEW": {
+      "required": true
+    },
+    "$OUTPUT": {
+      "required": true
+    }
+  },
+  "requires": {
+    "backends": [
+      "cuda"
+    ],
+    "nodes": [
+      "UNETLoader",
+      "CLIPLoader",
+      "VAELoader",
+      "VAEEncode",
+      "VAEDecode",
+      "KSampler",
+      "LoadImage",
+      "SaveImage",
+      "TextEncodeQwenImageEditPlus",
+      "ModelSamplingAuraFlow",
+      "CFGNorm",
+      "FluxKontextImageScale",
+      "FluxKontextMultiReferenceLatentMethod",
+      "ComfySwitchNode",
+      "LoraLoaderModelOnly",
+      "PrimitiveInt",
+      "PrimitiveFloat",
+      "PrimitiveBoolean"
+    ],
+    "checkpoints": {
+      "slot": "$CHECKPOINT",
+      "note": "Same weights as qwen-image-edit-2511-base; see that manifest for why int8_convrot is preferred.",
+      "variants": {
+        "int8_convrot": {
+          "folder": "diffusion_models",
+          "file": "qwen_image_edit_2511_int8_convrot.safetensors",
+          "gb": 20.5,
+          "url": "https://huggingface.co/Comfy-Org/Qwen-Image-Edit_ComfyUI/resolve/main/split_files/diffusion_models/qwen_image_edit_2511_int8_convrot.safetensors",
+          "requiresNativeOps": [
+            "int8_tensorwise",
+            "convrot_w4a4"
+          ]
+        },
+        "fp8mixed": {
+          "folder": "diffusion_models",
+          "file": "qwen_image_edit_2511_fp8mixed.safetensors",
+          "gb": 20.5,
+          "sha256": "c9fdc158e46d3b61ef75f21ae866ca2fe808bf4a53643120d1c1e87c19280a4e",
+          "url": "https://huggingface.co/Comfy-Org/Qwen-Image-Edit_ComfyUI/resolve/main/split_files/diffusion_models/qwen_image_edit_2511_fp8mixed.safetensors",
+          "requiresNativeOps": [
+            "float8_e4m3fn"
+          ]
+        }
+      },
+      "preferred": "int8_convrot",
+      "alternatives": [
+        "fp8mixed"
+      ]
+    },
+    "models": [
+      {
+        "folder": "text_encoders",
+        "file": "qwen_2.5_vl_7b_fp8_scaled.safetensors",
+        "gb": 8.7,
+        "sha256": "cb5636d852a0ea6a9075ab1bef496c0db7aef13c02350571e388aea959c5c0b4",
+        "url": "https://huggingface.co/Comfy-Org/Qwen-Image_ComfyUI/resolve/main/split_files/text_encoders/qwen_2.5_vl_7b_fp8_scaled.safetensors"
+      },
+      {
+        "folder": "vae",
+        "file": "qwen_image_vae.safetensors",
+        "gb": 0.25,
+        "sha256": "a70580f0213e67967ee9c95f05bb400e8fb08307e017a924bf3441223e023d1f",
+        "url": "https://huggingface.co/Comfy-Org/Qwen-Image_ComfyUI/resolve/main/split_files/vae/qwen_image_vae.safetensors"
+      },
+      {
+        "folder": "loras",
+        "file": "qwen-image-edit-2511-multiple-angles-lora.safetensors",
+        "gb": 0.3,
+        "sha256": "42426ded4e25fd22879d9e198b857556445ef4ca56e8da3246d0345155bb6765",
+        "url": "https://huggingface.co/fal/Qwen-Image-Edit-2511-Multiple-Angles-LoRA/resolve/main/qwen-image-edit-2511-multiple-angles-lora.safetensors",
+        "note": "fal, Apache-2.0. Wired before ModelSamplingAuraFlow so both quality branches get it."
+      }
+    ],
+    "conditionalModels": [
+      {
+        "folder": "loras",
+        "file": "Qwen-Image-Edit-2511-Lightning-4steps-V1.0-bf16.safetensors",
+        "gb": 0.85,
+        "requiredFor": [
+          "preview"
+        ],
+        "sha256": "22226e8d05d354bb356627d428809f5afd7819399b077238a2b70a82883a904f",
+        "url": "https://huggingface.co/lightx2v/Qwen-Image-Edit-2511-Lightning/resolve/main/Qwen-Image-Edit-2511-Lightning-4steps-V1.0-bf16.safetensors"
+      }
+    ],
+    "compatibility": {
+      "tier": "full",
+      "minimumVramGb": 24,
+      "note": "Below this, no Lite preset exists yet: recommend Cloud."
+    }
+  },
+  "notes": [
+    "Graph = qwen-image-edit-2511-base with $IMAGE_2, $IMAGE_3 and their scalers removed, and one LoraLoaderModelOnly (multiple-angles, strength 1.2) between UNETLoader and ModelSamplingAuraFlow."
+  ],
+  "tier": "full",
+  "minimumVramGb": 24
+}

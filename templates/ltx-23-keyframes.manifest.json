@@ -1,6 +1,7 @@
 {
   "id": "ltx-23-keyframes",
   "name": "LTX 2.3 · keyframe interpolation",
+  "model": "ltx",
   "kind": "video",
   "version": 1,
   "fps": 24,
@@ -194,10 +195,11 @@
   },
   "notes": [
     "Derived from the user's own working LTX_multimage_API.json, retitled rather than rebuilt. Trimming the three sampling stages down to one would have been a smaller graph and a worse bet: this is the arrangement already known to run on the reference machine.",
-    "Output resolution is NOT a parameter. It is derived inside the workflow: MultiImageLoader -> ImageScaleBy 0.5 -> GetImageSize -> EmptyLTXVLatentVideo, so the render follows the keyframes' own size at half scale and the three stages upscale from there.",
+    "Output resolution is pinned to 1080p, not a parameter (user's call, 2026-09-24): MultiImageLoader brings the keys to 1080 tall keeping their proportion -> ImageScaleBy 1/3 -> EmptyLTXVLatentVideo, stage 2 upsamples x2 and stage 3 x1.5 (its switch set to False). LTX works in 32-pixel blocks, so a 16:9 shot comes out 1920x1056, the nearest it can get to 1080. It used to follow the keyframes' own size (half, then x2, x2), which put a 1672x941 key at 3328x1792: near-4K, for an editor that shows 720p.",
     "fps is pinned at 24 and declared above. Four nodes carry a frame_rate and they must agree; until one value can reach all of them, a project at another fps must be refused with that reason rather than rendered at the wrong speed.",
     "measuredVramGb and any seconds-per-step stay absent until a real run fills them in. A number here that was never measured would be read as one that was.",
-    "The KJNodes live-preview override is deliberately NOT in this graph. It is a ComfyUI-UI convenience with no effect on the render, and headless it is fatal: its preview thread reads PromptServer.last_node_id, which ComfyUI only sets for a prompt queued with a client_id. The bridge queues without one on purpose, so the first preview callback killed the run 122 seconds in with \"'NoneType' object has no attribute 'encode'\". The same workflow run from ComfyUI's own tab finished fine, which is exactly why this was worth writing down: the node the user sees working is the node that cannot work here. Its tiny VAE (taeltx2_3.safetensors) went with it -- nothing else decoded through it."
+    "The KJNodes live-preview override is deliberately NOT in this graph. It is a ComfyUI-UI convenience with no effect on the render, and headless it is fatal: its preview thread reads PromptServer.last_node_id, which ComfyUI only sets for a prompt queued with a client_id. The bridge queues without one on purpose, so the first preview callback killed the run 122 seconds in with \"'NoneType' object has no attribute 'encode'\". The same workflow run from ComfyUI's own tab finished fine, which is exactly why this was worth writing down: the node the user sees working is the node that cannot work here. Its tiny VAE (taeltx2_3.safetensors) went with it -- nothing else decoded through it.",
+    "The final LTXVCropGuides (11:383) takes its conditioning from the stage-3 sequencer (11:8:411), like every other stage crops with the sequencer that added the guides. Inherited from the user's workflow it read stage 1's (376), and the first cloud render (2026-09-24) came back 33 + 16 frames: two keys x 8 frames of guide latents left on the end, showing the keyframes again after the shot."
   ],
   "tier": "full",
   "minimumVramGb": 24

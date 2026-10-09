@@ -15,6 +15,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import os
 import re
 import threading
 from dataclasses import dataclass
@@ -159,11 +160,18 @@ class Template:
         step = int(rule.get("step") or 1)
         offset = int(rule.get("offset") or 0)
         count = max(minimum, int(wanted))
+        # DOWN, and capped, when the frames come from an existing clip: a
+        # re-shot video cannot be longer than the video it re-shoots, and the
+        # frames past its end would be generated from nothing.
+        down = rule.get("round") == "down"
+        maximum = rule.get("max")
+        if isinstance(maximum, int) and not isinstance(maximum, bool):
+            count = min(count, maximum)
         if step > 1:
             remainder = (count - offset) % step
             if remainder:
-                count += step - remainder
-        return count
+                count += -remainder if down else step - remainder
+        return max(count, minimum)
 
     @property
     def quality(self) -> dict[str, Any]:
@@ -381,6 +389,11 @@ class Template:
         return {
             "id": self.id,
             "name": self.name,
+            # The MODEL this preset implements ("ltx", "minimax-h3-flf"), which is
+            # what the editor shows. Two presets can serve the same intent with
+            # different models, so choosing by intent alone could run MiniMax
+            # under a menu that says LTX.
+            **({"model": self.manifest["model"]} if self.manifest.get("model") else {}),
             "kind": self.kind,
             # The rate this preset renders at, when it has one. The editor
             # cannot check a project against it otherwise, and an unchecked
@@ -408,6 +421,9 @@ class Template:
             "roleMax": {name: self.role_max(name) for name in sorted(self.roles)},
             "priority": int(self.manifest.get("priority") or 0),
             "tier": self.tier,
+            # So a menu can leave out what this card cannot run: the cloud
+            # variants ship in the same folder and asked for 48 GB on a 3090.
+            "minimumVramGb": self.minimum_vram_gb,
         }
 
 
@@ -447,6 +463,34 @@ def _hash(manifest_bytes: bytes, graph_bytes: bytes) -> str:
     return f"sha256:{digest.hexdigest()}"
 
 
+MODEL_SUFFIXES = (
+    ".safetensors", ".ckpt", ".pt", ".pth", ".bin", ".gguf", ".sft", ".onnx",
+)
+
+
+def native_model_paths(graph: dict[str, Any], sep: str = os.sep) -> dict[str, Any]:
+    """Model filenames in subfolders, written with this platform's separator.
+
+    ComfyUI lists a model in a subfolder as ``ltx2\\file`` on Windows and
+    ``ltx2/file`` on Linux, and compares the widget value to that list as a
+    plain string. Templates are exported from whichever machine built them, so
+    without this a graph made on Windows reports its LoRA as missing on the
+    Linux cloud worker, with the file sitting right there. Edits in place.
+    """
+    for node in graph.values():
+        inputs = node.get("inputs") if isinstance(node, dict) else None
+        if not isinstance(inputs, dict):
+            continue
+        for widget, value in inputs.items():
+            if (
+                isinstance(value, str)
+                and value.lower().endswith(MODEL_SUFFIXES)
+                and ("/" in value or "\\" in value)
+            ):
+                inputs[widget] = value.replace("\\", "/").replace("/", sep)
+    return graph
+
+
 def _load_one(manifest_path: Path) -> Template | None:
     graph_path = manifest_path.with_name(
         manifest_path.name[: -len(".manifest.json")] + ".json"
@@ -477,7 +521,7 @@ def _load_one(manifest_path: Path) -> Template | None:
     return Template(
         id=template_id,
         manifest=manifest,
-        graph=graph,
+        graph=native_model_paths(graph),
         hash=_hash(manifest_bytes, graph_bytes),
     )
 

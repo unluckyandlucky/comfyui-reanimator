@@ -1,0 +1,162 @@
+{
+  "id": "ltx-25-restore",
+  "name": "LTX-2.5 · Restore (archive footage)",
+  "model": "ltx-25-restore",
+  "kind": "video",
+  "version": 1,
+  "intents": {
+    "video_restore": {
+      "requires": [
+        "sourceVideo"
+      ],
+      "note": "Video in, the same shot as a clean, colour, higher-resolution capture: removes compression damage, tape and sepia casts, flicker. Colour is inferred from content; the user's words steer it."
+    }
+  },
+  "priority": 10,
+  "description": "Restoration and colourisation of archive footage with Lightricks' Restore IC-LoRA on LTX-2.5 distilled through the tiled fusion sampler (qHD tiles). Made for the cloud GPU.",
+  "inputStrategy": "roles",
+  "images": 0,
+  "roles": {
+    "sourceVideo": {
+      "slot": "$VIDEO_1",
+      "required": true,
+      "max": 1,
+      "note": "Archive or low-bitrate footage, progressive. 49 or 97 frames per pass are best. The output canvas is FullHD by default in the source's aspect."
+    }
+  },
+  "slots": {
+    "$VIDEO_1": {
+      "required": true,
+      "note": "source video"
+    },
+    "$PROMPT": {
+      "required": true
+    },
+    "$NEGATIVE": {
+      "required": false,
+      "note": "Things that must not be invented. Has no effect at cfg 1 (the distilled schedule)."
+    },
+    "$SEED": {
+      "required": false,
+      "randomizePerRun": false
+    },
+    "$CHECKPOINT": {
+      "required": true,
+      "note": "chosen from requires.checkpoints, never by the caller"
+    },
+    "$OUTPUT": {
+      "required": true
+    },
+    "$OUTPUT_SIZE": {
+      "required": false,
+      "note": "FullHD (default), 4K or 8K: the canvas the clip is lanczos-resized to and refined at."
+    }
+  },
+  "requires": {
+    "backends": [
+      "cuda"
+    ],
+    "nodes": [
+      "CLIPLoader",
+      "CLIPTextEncode",
+      "CreateVideo",
+      "EmptyLTXVLatentVideo",
+      "GetImageSize",
+      "GetVideoComponents",
+      "ImageBatch",
+      "ImageFromBatch",
+      "ImageScale",
+      "KSamplerSelect",
+      "LTXAddVideoICLoRAGuide",
+      "LTXICLoRALoaderModelOnly",
+      "LTXVConditioning",
+      "LTXVGetTilingSizes",
+      "LTXVTiledFusionSampler",
+      "LoadVideo",
+      "ManualSigmas",
+      "RepeatImageBatch",
+      "SaveVideo",
+      "UNETLoader",
+      "VAEDecodeTiled",
+      "VAELoader",
+      "easy mathInt"
+    ],
+    "checkpoints": {
+      "slot": "$CHECKPOINT",
+      "variants": {
+        "int8_convrot": {
+          "folder": "diffusion_models",
+          "file": "ltx-2.5-22b-distilled-transformer-comfy-int8-convrot.safetensors",
+          "gb": 21.5,
+          "url": "https://huggingface.co/Lightricks/LTX-2.5/resolve/main/diffusion_models/ltx-2.5-22b-distilled-transformer-comfy-int8-convrot.safetensors",
+          "requiresNativeOps": [
+            "int8_tensorwise",
+            "convrot_w4a4"
+          ]
+        }
+      },
+      "preferred": "int8_convrot",
+      "alternatives": []
+    },
+    "models": [
+      {
+        "folder": "text_encoders",
+        "file": "gemma4-12b-with-proj-ltx-2.5-comfy-int8-convrot.safetensors",
+        "gb": 15.37,
+        "url": "https://huggingface.co/Lightricks/LTX-2.5/resolve/main/text_encoders/gemma4-12b-with-proj-ltx-2.5-comfy-int8-convrot.safetensors",
+        "note": "Encodes the empty prompt only, once per run."
+      },
+      {
+        "folder": "vae",
+        "file": "ltx-2.5-video-vae-bf16.safetensors",
+        "gb": 1.47,
+        "url": "https://huggingface.co/Lightricks/LTX-2.5/resolve/main/vae/ltx-2.5-video-vae-bf16.safetensors"
+      },
+      {
+        "folder": "loras",
+        "file": "ltx-2.5-22b-ic-lora-restore-1.0.safetensors",
+        "gb": 1.71,
+        "url": "https://huggingface.co/Lightricks/LTX-2.5-22b-IC-LoRA-Restore/resolve/main/ltx-2.5-22b-ic-lora-restore-1.0.safetensors"
+      }
+    ],
+    "compatibility": {
+      "tier": "full",
+      "minimumVramGb": 48,
+      "note": "Full-HD 145-frame clips need an H100/B200-class GPU (model card). Meant for RunPod (RTX PRO 6000 / H100)."
+    },
+    "nodePacks": [
+      {
+        "name": "ComfyUI-LTXVideo",
+        "provides": [
+          "LTXAddVideoICLoRAGuide",
+          "LTXICLoRALoaderModelOnly",
+          "LTXVGetTilingSizes",
+          "LTXVTiledFusionSampler"
+        ],
+        "note": "Lightricks' own pack; the IC-LoRA nodes are not in ComfyUI core."
+      },
+      {
+        "name": "comfyui-easy-use",
+        "provides": [
+          "easy mathInt"
+        ]
+      }
+    ]
+  },
+  "notes": [
+    "Built by tools/build_ltx25_iclora_templates.py; edit that script, not this file.",
+    "Weights are gated on Hugging Face: each IC-LoRA repo has its own license gate to accept."
+  ],
+  "tier": "full",
+  "minimumVramGb": 48,
+  "prompt": {
+    "slot": "$PROMPT",
+    "instructionParameter": "instruction",
+    "lines": [
+      {
+        "text": "natural colour, daylight, sharp photographic detail, crisp faces and clothing texture, natural grain, high resolution footage"
+      }
+    ],
+    "note": "Describe period, place, light and clothing: colour is a semantic decision the prompt steers. Keep it generic across the frame."
+  }
+}

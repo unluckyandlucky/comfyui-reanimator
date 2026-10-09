@@ -14,12 +14,11 @@ a stolen assertion useless on its own.
 from __future__ import annotations
 
 import logging
-from pathlib import Path
 from typing import Any
 
 from aiohttp import web
 
-from . import capabilities, config, media
+from . import capabilities, config
 from .pairing import PairingError, approvals, tokens
 
 log = logging.getLogger("reanimator.bridge")
@@ -88,47 +87,6 @@ def register(prompt_server: Any, port_getter) -> None:
         config.update(dev_origins=enabled)
         log.info("Reanimator dev origins %s", "enabled" if enabled else "disabled")
         return _json({"devOrigins": enabled, "origins": list(config.allowed_origins())})
-
-    @routes.get("/reanimator/panel/project-root")
-    async def get_project_root(_: web.Request) -> web.Response:
-        root = media.project_root()
-        return _json(
-            {
-                "projectRoot": str(root) if root else None,
-                "mediaCount": len(media.list_media(root)) if root else 0,
-            }
-        )
-
-    @routes.post("/reanimator/panel/project-root")
-    async def set_project_root(request: web.Request) -> web.Response:
-        """Authorize a folder for local media.
-
-        The path is typed here, in ComfyUI, and never travels from the browser --
-        the browser cannot know a real path, and a native file dialog is not an
-        option on a headless install.
-        """
-        body = await request.json()
-        raw = str(body.get("path", "")).strip()
-        if not raw:
-            config.update(project_root=None)
-            media.capabilities.revoke_all()
-            return _json({"projectRoot": None})
-
-        path = Path(raw).expanduser()
-        try:
-            resolved = path.resolve(strict=True)
-        except (OSError, RuntimeError):
-            return _json({"error": f"No such folder: {raw}"}, status=400)
-        if not resolved.is_dir():
-            return _json({"error": "Not a folder."}, status=400)
-
-        config.update(project_root=str(resolved))
-        # Old capabilities pointed into the previous root.
-        media.capabilities.revoke_all()
-        log.info("Reanimator project root set to %s", resolved)
-        return _json(
-            {"projectRoot": str(resolved), "mediaCount": len(media.list_media(resolved))}
-        )
 
     @routes.post("/reanimator/panel/device-label")
     async def device_label(request: web.Request) -> web.Response:

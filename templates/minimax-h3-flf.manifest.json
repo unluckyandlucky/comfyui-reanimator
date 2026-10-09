@@ -1,6 +1,7 @@
 {
   "id": "minimax-h3-flf",
   "name": "MiniMax H3 · first & last frame",
+  "model": "minimax-h3-flf",
   "kind": "video",
   "version": 1,
   "fps": 24,
@@ -120,7 +121,15 @@
     "compatibility": {
       "tier": "full",
       "minimumVramGb": 24,
-      "note": "Not measured yet. Replace with a real reading from the first end-to-end run."
+      "note": "First end-to-end run, 2026-09-14, RTX 3090 / ComfyUI 0.35.1, cold (nothing loaded): 5 s clip from one 1280x720 image -> 1280x736, 124 frames + AAC audio, 516 s total. Sampling 6:04 for 8 steps (~40-45 s/step after a 60 s first step). The rest is the nvfp4 text encoder (ComfyUI log: 'emulated ops: ... nvfp4') and the two VAEs. int8_tensorwise and convrot_w4a4 run natively.",
+      "measured": {
+        "machine": "RTX 3090 / ComfyUI 0.35.1",
+        "clipSeconds": 5,
+        "output": "1280x736, 124 frames, h264 + aac",
+        "totalSecondsCold": 516,
+        "samplingSeconds": 364,
+        "steps": 8
+      }
     }
   },
   "notes": [

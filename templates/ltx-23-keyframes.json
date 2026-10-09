@@ -220,7 +220,7 @@
   "inputs": {
    "image_paths": "frame_0001.png\nframe_0015.png\nframe_0051.png",
    "width": 0,
-   "height": 0,
+   "height": 1080,
    "interpolation": "lanczos",
    "resize_method": "keep proportion",
    "multiple_of": 0,
@@ -414,7 +414,7 @@
  "7:357": {
   "inputs": {
    "upscale_method": "bilinear",
-   "scale_by": 0.5,
+   "scale_by": 0.3333,
    "image": [
     "381",
     0
@@ -462,11 +462,11 @@
  "11:383": {
   "inputs": {
    "positive": [
-    "376",
+    "11:8:411",
     0
    ],
    "negative": [
-    "376",
+    "11:8:411",
     1
    ],
    "latent": [
@@ -1267,7 +1267,7 @@
  },
  "11:8:339": {
   "inputs": {
-   "value": true
+   "value": false
   },
   "class_type": "PrimitiveBoolean",
   "_meta": {

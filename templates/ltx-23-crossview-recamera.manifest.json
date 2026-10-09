@@ -1,0 +1,245 @@
+{
+  "id": "ltx-23-crossview-recamera",
+  "name": "LTX 2.3 · CrossView camera move",
+  "model": "ltx",
+  "kind": "video",
+  "version": 1,
+  "fps": 24,
+  "intents": {
+    "recamera_video": {
+      "requires": [
+        "sourceVideo"
+      ],
+      "note": "Re-shoots an existing clip from another camera angle and keeps its motion. Measured on an RTX 3090 on 2026-09-19 (docs/crossview-warp-ab.md): on a generated shot at +/-25 degrees the characters, the vehicles and the action survived and the angle changed both ways. Built by tools/build_crossview_template.py, not exported from a canvas."
+    }
+  },
+  "priority": 100,
+  "description": "Re-shoots your generated video from a new camera angle, keeping the motion. Runs on your GPU; nothing leaves this machine.",
+  "inputStrategy": "roles",
+  "images": 0,
+  "roles": {
+    "sourceVideo": {
+      "slot": "$VIDEO_1",
+      "required": true,
+      "note": "The clip to re-shoot. It is warped by depth (MoGe) into the new camera and also given to the model as itself, which is what carries identity."
+    }
+  },
+  "frames": {
+    "slot": "$FRAMES",
+    "min": 9,
+    "max": 121,
+    "step": 8,
+    "offset": 1,
+    "round": "down",
+    "note": "8n+1 like every LTX preset, but rounded DOWN: the frames past the end of the source have nothing to be re-shot from. Capped at 121 (5 s at 24 fps) until a longer run has been measured on a 24 GB card."
+  },
+  "camera": {
+    "requiresMove": true,
+    "note": "Degrees, not words: CrossView-Warp takes the angle as a number, so a 15 degree move is a 15 degree move. The ranges are the LoRA card's 'usable' band; its 'reliable' band is +/-45 azimuth and -20..+30 elevation. Distance is refused because the author says it does not work in v2. Positive azimuth is camera right, as in the editor: checked by parallax on the 2026-09-19 runs.",
+    "axes": {
+      "azimuth": {
+        "slot": "$AZIMUTH",
+        "deadband": 2,
+        "min": -90,
+        "max": 90,
+        "rangeMessage": "This camera move takes up to 90 degrees left or right; past 45 the model invents most of what it shows."
+      },
+      "elevation": {
+        "slot": "$ELEVATION",
+        "deadband": 2,
+        "min": -35,
+        "max": 45,
+        "rangeMessage": "This camera move takes the camera from 35 degrees below to 45 degrees above the shot."
+      },
+      "distance": {
+        "center": 1,
+        "deadband": 0.05,
+        "unsupported": {
+          "positive": "The video camera move cannot dolly yet: its model was barely trained on distance. Reset the dolly and try the angle alone.",
+          "negative": "The video camera move cannot dolly yet: its model was barely trained on distance. Reset the dolly and try the angle alone."
+        }
+      },
+      "roll": {
+        "deadband": 1,
+        "unsupported": {
+          "positive": "The video camera move cannot roll the camera.",
+          "negative": "The video camera move cannot roll the camera."
+        }
+      },
+      "panX": {
+        "deadband": 0.01,
+        "unsupported": {
+          "positive": "The video camera move cannot pan the camera.",
+          "negative": "The video camera move cannot pan the camera."
+        }
+      },
+      "panY": {
+        "deadband": 0.01,
+        "unsupported": {
+          "positive": "The video camera move cannot pan the camera.",
+          "negative": "The video camera move cannot pan the camera."
+        }
+      }
+    }
+  },
+  "prompt": {
+    "slot": "$PROMPT",
+    "note": "The graph ships the LoRA's one-word trigger, 'Crossview.', and nothing is composed into it."
+  },
+  "slots": {
+    "$VIDEO_1": {
+      "required": true,
+      "note": "the clip to re-shoot"
+    },
+    "$FRAMES": {
+      "required": true,
+      "note": "how many frames of the clip to re-shoot; 8n+1, rounded down"
+    },
+    "$AZIMUTH": {
+      "required": true,
+      "note": "degrees, camera right positive; written from the camera, never sent directly"
+    },
+    "$ELEVATION": {
+      "required": true,
+      "note": "degrees, camera up positive; written from the camera, never sent directly"
+    },
+    "$PROMPT": {
+      "required": true
+    },
+    "$SEED": {
+      "required": false,
+      "randomizePerRun": true
+    },
+    "$CHECKPOINT": {
+      "required": true,
+      "note": "chosen from requires.checkpoints, never by the caller"
+    },
+    "$OUTPUT": {
+      "required": true
+    }
+  },
+  "requires": {
+    "backends": [
+      "cuda"
+    ],
+    "nodes": [
+      "BasicScheduler",
+      "CFGGuider",
+      "CLIPTextEncode",
+      "CheckpointLoaderSimple",
+      "ConditioningZeroOut",
+      "CreateVideo",
+      "CrossViewWarp",
+      "EmptyLTXVLatentVideo",
+      "GetICLoRAParameters",
+      "GetImageSizeAndCount",
+      "ImageScaleBy",
+      "ImageScaleToTotalPixels",
+      "KSamplerSelect",
+      "LTXAVTextEncoderLoader",
+      "LTXVAddGuide",
+      "LTXVConcatAVLatent",
+      "LTXVConditioning",
+      "LTXVCropGuides",
+      "LTXVEmptyLatentAudio",
+      "LTXVLatentUpsampler",
+      "LTXVSeparateAVLatent",
+      "LatentUpscaleModelLoader",
+      "LoadMoGeModel",
+      "LoraLoaderModelOnly",
+      "ManualSigmas",
+      "MoGeInference",
+      "PrimitiveFloat",
+      "PrimitiveInt",
+      "RandomNoise",
+      "SamplerCustomAdvanced",
+      "SaveVideo",
+      "VAEDecodeTiled",
+      "VAELoaderKJ",
+      "VHS_LoadVideo"
+    ],
+    "nodePacks": [
+      {
+        "name": "ComfyUI-CrossViewWarp",
+        "provides": [
+          "CrossViewWarp"
+        ],
+        "note": "cseti007, Apache-2.0. Install by git clone into custom_nodes; no pip packages. Reviewed 2026-09-19: no network, subprocess or eval."
+      },
+      {
+        "name": "ComfyUI-VideoHelperSuite",
+        "provides": [
+          "VHS_LoadVideo"
+        ],
+        "note": "Chosen over core LoadVideo for frame_load_cap and force_rate: the clip has to come in at 24 fps and at exactly the frame count the latent is built for."
+      },
+      {
+        "name": "ComfyUI-KJNodes",
+        "provides": [
+          "VAELoaderKJ",
+          "GetImageSizeAndCount"
+        ]
+      }
+    ],
+    "checkpoints": {
+      "slot": "$CHECKPOINT",
+      "variants": {
+        "dev_fp8": {
+          "folder": "checkpoints",
+          "file": "ltx-2.3-22b-dev-fp8.safetensors",
+          "gb": 22
+        }
+      },
+      "preferred": "dev_fp8",
+      "alternatives": []
+    },
+    "models": [
+      {
+        "folder": "loras",
+        "file": "LTX2.3-22B_IC-LoRA-CrossView-Warp_v2_6000.safetensors",
+        "gb": 0.33,
+        "sha256": "e9796a6e14a8f8fadf0eda6c0ccc6c300c02bd5457fe9a0d4b91ffec39badda3",
+        "url": "https://huggingface.co/Cseti/LTX2.3-22B_IC-LoRA-CrossView-Warp_v2/resolve/main/LTX2.3-22B_IC-LoRA-CrossView-Warp_v2_6000.safetensors",
+        "note": "Cseti, Apache-2.0."
+      },
+      {
+        "folder": "geometry_estimation",
+        "file": "moge_2_vitl_normal_fp16.safetensors",
+        "gb": 0.66,
+        "sha256": "cb1a692d03235671e959e81360d7b4d9f44aefadb1f852d6ca6aa17799d5e31f",
+        "url": "https://huggingface.co/Comfy-Org/MoGe/resolve/main/geometry_estimation/moge_2_vitl_normal_fp16.safetensors",
+        "note": "MIT. The depth the LoRA was trained on; the author measured Depth Anything V2 at twice the warp error."
+      },
+      {
+        "folder": "text_encoders",
+        "file": "gemma_3_12B_it_fp4_mixed.safetensors",
+        "gb": 9.45,
+        "sha256": "aaca463d11e6d8d2a4bdb0d6299214c15ef78a3f73e0ef8113d5a9d0219b3f6d",
+        "url": "https://huggingface.co/Comfy-Org/ltx-2/resolve/main/split_files/text_encoders/gemma_3_12B_it_fp4_mixed.safetensors"
+      },
+      {
+        "folder": "vae",
+        "file": "LTX23_video_vae_bf16.safetensors"
+      },
+      {
+        "folder": "vae",
+        "file": "LTX23_audio_vae_bf16.safetensors"
+      },
+      {
+        "folder": "latent_upscale_models",
+        "file": "ltx-2.3-spatial-upscaler-x2-1.1.safetensors"
+      },
+      {
+        "folder": "loras",
+        "file": "ltx2/ltx-2.3-22b-distilled-lora-dynamic_fro09_avg_rank_105_bf16.safetensors"
+      }
+    ],
+    "compatibility": {
+      "tier": "full",
+      "minimumVramGb": 24,
+      "note": "Measured on a 24 GB RTX 3090 only."
+    }
+  },
+  "tier": "full",
+  "minimumVramGb": 24
+}
